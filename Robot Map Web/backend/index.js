@@ -8,7 +8,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ===== Serial =====lppp
+// ===== Serial =====
 const port = new SerialPort({ path: "COM9", baudRate: 115200 });
 
 port.on("open", () => console.log("✅ Serial connected to ESP32"));
