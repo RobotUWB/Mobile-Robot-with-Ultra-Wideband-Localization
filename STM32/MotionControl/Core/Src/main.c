@@ -102,7 +102,6 @@ int main(void)
   while (1)
   {
 
-    HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);  
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
