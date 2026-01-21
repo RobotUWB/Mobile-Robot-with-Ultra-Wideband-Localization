@@ -20,7 +20,8 @@ static constexpr float FIELD_W = 3.00f;
 static constexpr float FIELD_H = 2.00f;
 
 // ===== Heights (meters) =====
-static constexpr float TAG_Z = 0.30f; 
+// >>> [แก้ไข 1] ตั้งความสูง Tag 1 เป็น 1.15 เมตร
+static constexpr float TAG_Z = 1.15f; 
 static constexpr float AZ[4] = { 1.60f, 1.60f, 1.60f, 1.60f }; 
 
 static constexpr bool USE_2D_HEIGHT_CORR = true;
@@ -36,10 +37,13 @@ static constexpr float MAX_RANGE_M = 10.00f;
 // =================== FILTERING ===================
 static constexpr int MED_N = 7;
 static constexpr float MAX_JUMP_M = 5.00f;
-static constexpr float RANGE_EMA_ALPHA = 0.10f;
+
+// >>> [แก้ไข 2] ลดค่าลงเพื่อให้ระยะวัดนิ่งขึ้น (เดิม 0.10 -> 0.05)
+static constexpr float RANGE_EMA_ALPHA = 0.05f; 
 
 // =================== XY SMOOTHING ===================
-static constexpr float XY_ALPHA_BASE = 0.15f; 
+// >>> [แก้ไข 3] ลดค่าลงเพื่อให้จุดบนเว็บขยับนุ่มนวล (เดิม 0.15 -> 0.05)
+static constexpr float XY_ALPHA_BASE = 0.05f; 
 static constexpr float XY_ALPHA_MIN  = 0.05f; 
 static constexpr float XY_ALPHA_MAX  = 0.40f; 
 
@@ -49,7 +53,8 @@ static constexpr float RMSE_HARD_M = 0.80f;
 static constexpr float MAX_STEP_M = 0.50f;  
 
 // =================== TIMING ===================
-static constexpr uint32_t ANCHOR_TIMEOUT_MS = 1000;
+// >>> [แก้ไข 4] เพิ่มเวลาเป็น 3000ms (3 วินาที) กัน Anchor หลุด
+static constexpr uint32_t ANCHOR_TIMEOUT_MS = 3000;
 static constexpr uint32_t CAL_MS = 5000;
 
 // =================== STRUCTS & GLOBALS ===================
@@ -77,8 +82,12 @@ extern int cal_cnt[4];
 extern double mp_bias_sum[4];
 extern int mp_bias_cnt[4];
 
-// >>> NEW: Status Variable (0=Idle, 1=Calibrating, 2=Success, 3=Fail, 4=Reset)
+// Status Variable
 extern int cal_state;
+
+// ตัวแปรสำหรับเก็บค่า Tag 2
+extern float t2_x, t2_y;
+extern uint32_t t2_last_ms;
 
 // =================== SHARED HELPER FUNCTIONS ===================
 void saveBias();
