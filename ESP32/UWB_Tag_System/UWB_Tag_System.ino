@@ -38,6 +38,9 @@ double mp_bias_sum[4] = { 0, 0, 0, 0 };
 int mp_bias_cnt[4] = { 0, 0, 0, 0 };
 int cal_state = 0; 
 
+// [แก้ไข] ประกาศ Mutex ที่นี่ (Global) เพื่อให้ใช้ร่วมกันได้จริง
+portMUX_TYPE myMutex = portMUX_INITIALIZER_UNLOCKED;
+
 // --- ตัวแปร volatile สำหรับรับค่าจาก ESP-NOW ---
 // ใช้ในฟังก์ชัน OnDataRecv เท่านั้น เพื่อความเสถียร
 volatile float isr_t2_x = 0.0f;
@@ -110,7 +113,7 @@ void loop() {
   // --- ย้ายค่าจาก ISR เข้าตัวแปรหลักอย่างปลอดภัย ---
   if (isr_new_data) {
     // [CRITICAL SECTION] ป้องกันข้อมูลตีกันระหว่าง Interrupt และ Main Loop
-    portMUX_TYPE myMutex = portMUX_INITIALIZER_UNLOCKED;
+    // [แก้ไข] ใช้ตัวแปร Global myMutex แทนการประกาศใหม่
     portENTER_CRITICAL(&myMutex);
 
     t2_x = isr_t2_x;
