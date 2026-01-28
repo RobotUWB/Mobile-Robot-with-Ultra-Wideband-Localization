@@ -235,6 +235,47 @@ export default function App() {
       showToast("Reconnecting...", "info");
     }, 800);
   };
+  // ===== Calibration Actions (GET endpoints like friend's ESP32) =====
+  const calT1 = async () => {
+    const x = parseFloat(refX);
+    const y = parseFloat(refY);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      showToast("REF must be numbers", "error");
+      return;
+    }
+
+    try {
+      const url = `/api/cal?x=${encodeURIComponent(x)}&y=${encodeURIComponent(y)}`;
+      const r = await fetch(url);
+      if (!r.ok) throw new Error("CAL failed");
+      showToast("CAL T1 started", "success");
+    } catch (e) {
+      console.error(e);
+      showToast("CAL T1 failed (check /cal endpoint)", "error");
+    }
+  };
+
+  const saveT1 = async () => {
+    try {
+      const r = await fetch("/api/save");
+      if (!r.ok) throw new Error("SAVE failed");
+      showToast("SAVE T1 OK", "success");
+    } catch (e) {
+      console.error(e);
+      showToast("SAVE T1 failed (check /save endpoint)", "error");
+    }
+  };
+
+  const resetT1 = async () => {
+    try {
+      const r = await fetch("/api/reset");
+      if (!r.ok) throw new Error("RESET failed");
+      showToast("RESET T1 OK", "success");
+    } catch (e) {
+      console.error(e);
+      showToast("RESET T1 failed (check /reset endpoint)", "error");
+    }
+  };
 
   /* --- Polling Data Loop --- */
   useEffect(() => {
@@ -328,6 +369,10 @@ export default function App() {
         // 5) RMSE (optional)
         const r = Number(j.rmse);
         if (Number.isFinite(r)) setRmse(r);
+        // 6) Calibration state (optional) 0..4
+        const cs = Number(j.cs);
+        if (Number.isFinite(cs)) setCalState(cs);
+
       } catch (err) {
         setConnected(false);
       }
@@ -699,6 +744,121 @@ export default function App() {
 
         {/* --- Main Grid --- */}
         <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 20, flex: 1 }}>
+          {/* ===== TAG 1 CALIBRATION (เหมือนเพื่อน) ===== */}
+          <div
+            className="glass-panel"
+            style={{
+              borderRadius: 16,
+              padding: "14px 18px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 16,
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: 1, color: "var(--accent)" }}>
+              TAG 1 CALIBRATION
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12, fontWeight: 800, color: "var(--text-muted)" }}>REF:</span>
+
+              <input
+                className="mono-font"
+                value={refX}
+                onChange={(e) => setRefX(e.target.value)}
+                inputMode="decimal"
+                style={{
+                  width: 70,
+                  height: 30,
+                  borderRadius: 8,
+                  border: "1px solid rgba(255,255,255,0.10)",
+                  background: "rgba(2,6,23,0.55)",
+                  color: "#e2e8f0",
+                  padding: "0 10px",
+                  outline: "none",
+                }}
+              />
+
+              <input
+                className="mono-font"
+                value={refY}
+                onChange={(e) => setRefY(e.target.value)}
+                inputMode="decimal"
+                style={{
+                  width: 70,
+                  height: 30,
+                  borderRadius: 8,
+                  border: "1px solid rgba(255,255,255,0.10)",
+                  background: "rgba(2,6,23,0.55)",
+                  color: "#e2e8f0",
+                  padding: "0 10px",
+                  outline: "none",
+                }}
+              />
+
+              <button
+                onClick={calT1}
+                className="btn-base"
+                style={{
+                  height: 30,
+                  padding: "0 14px",
+                  borderRadius: 8,
+                  border: "none",
+                  background: "rgba(59,130,246,0.95)",
+                  color: "#fff",
+                  fontSize: 12,
+                }}
+              >
+                CAL T1
+              </button>
+
+              <button
+                onClick={saveT1}
+                className="btn-base"
+                style={{
+                  height: 30,
+                  padding: "0 14px",
+                  borderRadius: 8,
+                  border: "none",
+                  background: "rgba(30,41,59,0.85)",
+                  color: "#fff",
+                  fontSize: 12,
+                }}
+              >
+                SAVE T1
+              </button>
+
+              <button
+                onClick={resetT1}
+                className="btn-base"
+                style={{
+                  height: 30,
+                  padding: "0 14px",
+                  borderRadius: 8,
+                  border: "none",
+                  background: "rgba(30,41,59,0.85)",
+                  color: "#fff",
+                  fontSize: 12,
+                }}
+              >
+                RESET T1
+              </button>
+            </div>
+
+            <div
+              className="mono-font"
+              style={{
+                fontSize: 12,
+                fontWeight: 800,
+                color: CAL_COLOR[calState] ?? "#aaa",
+                letterSpacing: 0.5,
+              }}
+            >
+              {CAL_TEXT[calState] ?? "READY"}
+            </div>
+          </div>
+
           {/* --- Left Sidebar (Controls) --- */}
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
             {/* 1. Anchors Status */}
