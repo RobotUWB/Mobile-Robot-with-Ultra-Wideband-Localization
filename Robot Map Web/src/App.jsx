@@ -139,6 +139,14 @@ const TAG2_OFFSET_M = 0.40;
 
 /* ================== APP COMPONENT ================== */
 export default function App() {
+  // ===== Calibration UI =====
+  const [refX, setRefX] = useState("1.00");
+  const [refY, setRefY] = useState("1.50");
+  const [calState, setCalState] = useState(0); // 0..4 from ESP32 json.cs
+
+  const CAL_TEXT = ["READY", "CALIBRATING...", "SUCCESS!", "FAILED", "RESET DONE"];
+  const CAL_COLOR = ["#aaa", "#eab308", "#10b981", "#ef4444", "#3b82f6"];
+
   /* --- State: Canvas & Data --- */
   const canvasRef = useRef(null);
   const [scale, setScale] = useState(0.15);
@@ -607,8 +615,8 @@ export default function App() {
             toast.type === "error"
               ? "rgba(239, 68, 68, 0.9)"
               : toast.type === "success"
-              ? "rgba(34, 197, 94, 0.9)"
-              : "rgba(59, 130, 246, 0.9)",
+                ? "rgba(34, 197, 94, 0.9)"
+                : "rgba(59, 130, 246, 0.9)",
           color: "#fff",
           padding: "12px 24px",
           borderRadius: 8,
