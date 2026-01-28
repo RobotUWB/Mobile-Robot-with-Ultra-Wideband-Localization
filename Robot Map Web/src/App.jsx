@@ -98,6 +98,19 @@ const GlobalStyles = () => (
     }
 
     .mono-font { font-family: 'JetBrains Mono', monospace; }
+
+    input.cal-in {
+      border: 1px solid var(--border);
+      background: rgba(2, 6, 23, 0.55);
+      color: #e2e8f0;
+      outline: none;
+      border-radius: 10px;
+      padding: 8px 10px;
+      text-align: center;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      width: 76px;
+    }
     
     @keyframes pulse-ring {
       0% { transform: scale(0.8); opacity: 0.5; }
@@ -235,6 +248,7 @@ export default function App() {
       showToast("Reconnecting...", "info");
     }, 800);
   };
+
   // ===== Calibration Actions (GET endpoints like friend's ESP32) =====
   const calT1 = async () => {
     const x = parseFloat(refX);
@@ -369,10 +383,10 @@ export default function App() {
         // 5) RMSE (optional)
         const r = Number(j.rmse);
         if (Number.isFinite(r)) setRmse(r);
-        // 6) Calibration state (optional) 0..4
-        const cs = Number(j.cs);
-        if (Number.isFinite(cs)) setCalState(cs);
 
+        // ✅ 6) Calibration state (optional) 0..4
+        const cs = Number(j.cs);
+        if (Number.isFinite(cs)) setCalState(Math.max(0, Math.min(4, cs)));
       } catch (err) {
         setConnected(false);
       }
@@ -406,14 +420,7 @@ export default function App() {
           maxY = Math.max(maxY, a.y_mm);
         }
 
-        if (
-          isFinite(minX) &&
-          isFinite(maxX) &&
-          isFinite(minY) &&
-          isFinite(maxY) &&
-          minX !== maxX &&
-          minY !== maxY
-        ) {
+        if (isFinite(minX) && isFinite(maxX) && isFinite(minY) && isFinite(maxY) && minX !== maxX && minY !== maxY) {
           return { minX, maxX, minY, maxY };
         }
       }
@@ -430,7 +437,6 @@ export default function App() {
     };
 
     const drawTriangle = (x, y, size, color, glow, pointUp) => {
-      // pointUp=true = สามเหลี่ยมหัวขึ้น, false = หัวลง
       ctx.shadowBlur = 18;
       ctx.shadowColor = glow;
 
@@ -438,12 +444,12 @@ export default function App() {
       ctx.beginPath();
       if (pointUp) {
         ctx.moveTo(x, y - size);
-        ctx.lineTo(x + size * 0.85, y + size * 0.70);
-        ctx.lineTo(x - size * 0.85, y + size * 0.70);
+        ctx.lineTo(x + size * 0.85, y + size * 0.7);
+        ctx.lineTo(x - size * 0.85, y + size * 0.7);
       } else {
         ctx.moveTo(x, y + size);
-        ctx.lineTo(x + size * 0.85, y - size * 0.70);
-        ctx.lineTo(x - size * 0.85, y - size * 0.70);
+        ctx.lineTo(x + size * 0.85, y - size * 0.7);
+        ctx.lineTo(x - size * 0.85, y - size * 0.7);
       }
       ctx.closePath();
       ctx.fill();
@@ -660,8 +666,8 @@ export default function App() {
             toast.type === "error"
               ? "rgba(239, 68, 68, 0.9)"
               : toast.type === "success"
-                ? "rgba(34, 197, 94, 0.9)"
-                : "rgba(59, 130, 246, 0.9)",
+              ? "rgba(34, 197, 94, 0.9)"
+              : "rgba(59, 130, 246, 0.9)",
           color: "#fff",
           padding: "12px 24px",
           borderRadius: 8,
@@ -744,128 +750,14 @@ export default function App() {
 
         {/* --- Main Grid --- */}
         <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 20, flex: 1 }}>
-          {/* ===== TAG 1 CALIBRATION (เหมือนเพื่อน) ===== */}
-          <div
-            className="glass-panel"
-            style={{
-              borderRadius: 16,
-              padding: "14px 18px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 16,
-            }}
-          >
-            <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: 1, color: "var(--accent)" }}>
-              TAG 1 CALIBRATION
-            </div>
-
-            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 12, fontWeight: 800, color: "var(--text-muted)" }}>REF:</span>
-
-              <input
-                className="mono-font"
-                value={refX}
-                onChange={(e) => setRefX(e.target.value)}
-                inputMode="decimal"
-                style={{
-                  width: 70,
-                  height: 30,
-                  borderRadius: 8,
-                  border: "1px solid rgba(255,255,255,0.10)",
-                  background: "rgba(2,6,23,0.55)",
-                  color: "#e2e8f0",
-                  padding: "0 10px",
-                  outline: "none",
-                }}
-              />
-
-              <input
-                className="mono-font"
-                value={refY}
-                onChange={(e) => setRefY(e.target.value)}
-                inputMode="decimal"
-                style={{
-                  width: 70,
-                  height: 30,
-                  borderRadius: 8,
-                  border: "1px solid rgba(255,255,255,0.10)",
-                  background: "rgba(2,6,23,0.55)",
-                  color: "#e2e8f0",
-                  padding: "0 10px",
-                  outline: "none",
-                }}
-              />
-
-              <button
-                onClick={calT1}
-                className="btn-base"
-                style={{
-                  height: 30,
-                  padding: "0 14px",
-                  borderRadius: 8,
-                  border: "none",
-                  background: "rgba(59,130,246,0.95)",
-                  color: "#fff",
-                  fontSize: 12,
-                }}
-              >
-                CAL T1
-              </button>
-
-              <button
-                onClick={saveT1}
-                className="btn-base"
-                style={{
-                  height: 30,
-                  padding: "0 14px",
-                  borderRadius: 8,
-                  border: "none",
-                  background: "rgba(30,41,59,0.85)",
-                  color: "#fff",
-                  fontSize: 12,
-                }}
-              >
-                SAVE T1
-              </button>
-
-              <button
-                onClick={resetT1}
-                className="btn-base"
-                style={{
-                  height: 30,
-                  padding: "0 14px",
-                  borderRadius: 8,
-                  border: "none",
-                  background: "rgba(30,41,59,0.85)",
-                  color: "#fff",
-                  fontSize: 12,
-                }}
-              >
-                RESET T1
-              </button>
-            </div>
-
-            <div
-              className="mono-font"
-              style={{
-                fontSize: 12,
-                fontWeight: 800,
-                color: CAL_COLOR[calState] ?? "#aaa",
-                letterSpacing: 0.5,
-              }}
-            >
-              {CAL_TEXT[calState] ?? "READY"}
-            </div>
-          </div>
-
           {/* --- Left Sidebar (Controls) --- */}
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-            {/* 1. Anchors Status */}
+            {/* 1. Anchors Status + CAL (รวมในกล่องเดียวกัน) */}
             <div className="glass-panel" style={{ borderRadius: 16, padding: 20 }}>
               <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-muted)", marginBottom: 16, letterSpacing: 1 }}>
                 ANCHOR DISTANCES
               </div>
+
               <div style={{ display: "grid", gap: 12 }}>
                 {Object.entries(ranges).map(([k, v]) => (
                   <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -875,6 +767,105 @@ export default function App() {
                     </span>
                   </div>
                 ))}
+              </div>
+
+              {/* ===== TAG1 CALIBRATION (อยู่ใต้ ANCHOR DISTANCES) ===== */}
+              <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: "var(--text-muted)", letterSpacing: 1 }}>
+                    TAG1 CALIBRATION
+                  </div>
+
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 900,
+                      color: CAL_COLOR[calState] || "#aaa",
+                      letterSpacing: 0.5,
+                    }}
+                  >
+                    {CAL_TEXT[calState] || "READY"}
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 800 }}>REF:</span>
+
+                  <input
+                    className="cal-in"
+                    value={refX}
+                    onChange={(e) => setRefX(e.target.value)}
+                    inputMode="decimal"
+                    placeholder="1.00"
+                    title="REF X (meter)"
+                  />
+                  <input
+                    className="cal-in"
+                    value={refY}
+                    onChange={(e) => setRefY(e.target.value)}
+                    inputMode="decimal"
+                    placeholder="1.50"
+                    title="REF Y (meter)"
+                  />
+
+                  <button
+                    onClick={calT1}
+                    disabled={!connected}
+                    className="btn-base"
+                    style={{
+                      height: 34,
+                      padding: "0 12px",
+                      borderRadius: 10,
+                      border: "none",
+                      background: "rgba(59, 130, 246, 0.95)",
+                      color: "#fff",
+                      fontSize: 12,
+                      opacity: connected ? 1 : 0.5,
+                    }}
+                  >
+                    CAL T1
+                  </button>
+
+                  <button
+                    onClick={saveT1}
+                    disabled={!connected}
+                    className="btn-base"
+                    style={{
+                      height: 34,
+                      padding: "0 12px",
+                      borderRadius: 10,
+                      border: "none",
+                      background: "rgba(34, 197, 94, 0.95)",
+                      color: "#fff",
+                      fontSize: 12,
+                      opacity: connected ? 1 : 0.5,
+                    }}
+                  >
+                    SAVE
+                  </button>
+
+                  <button
+                    onClick={resetT1}
+                    disabled={!connected}
+                    className="btn-base"
+                    style={{
+                      height: 34,
+                      padding: "0 12px",
+                      borderRadius: 10,
+                      border: "none",
+                      background: "rgba(100, 116, 139, 0.95)",
+                      color: "#fff",
+                      fontSize: 12,
+                      opacity: connected ? 1 : 0.5,
+                    }}
+                  >
+                    RESET
+                  </button>
+                </div>
+
+                <div style={{ marginTop: 10, fontSize: 11, color: "var(--text-muted)", lineHeight: 1.35 }}>
+                  ใส่ค่า REF (เมตร) ของจุดอ้างอิงในแผนที่ แล้วกด <b>CAL T1</b>
+                </div>
               </div>
             </div>
 
