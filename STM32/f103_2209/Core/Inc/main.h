@@ -59,14 +59,14 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define EN_Pin GPIO_PIN_1
 #define EN_GPIO_Port GPIOA
-#define STEP_L_Pin GPIO_PIN_2
-#define STEP_L_GPIO_Port GPIOA
-#define DIR_L_Pin GPIO_PIN_3
-#define DIR_L_GPIO_Port GPIOA
 #define STEP_R_Pin GPIO_PIN_4
 #define STEP_R_GPIO_Port GPIOA
 #define DIR_R_Pin GPIO_PIN_5
 #define DIR_R_GPIO_Port GPIOA
+#define STEP_L_Pin GPIO_PIN_6
+#define STEP_L_GPIO_Port GPIOA
+#define DIR_L_Pin GPIO_PIN_7
+#define DIR_L_GPIO_Port GPIOA
 
 /* USER CODE BEGIN Private defines */
 
