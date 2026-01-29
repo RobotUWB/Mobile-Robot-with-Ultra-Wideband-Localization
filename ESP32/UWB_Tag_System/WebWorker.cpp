@@ -109,21 +109,26 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
   </div>
 
   <div class="card">
-    <div class="header" style="border:none; padding-bottom:0;"><div class="title" style="color:var(--accent);">Tag 1 Calibration</div><div id="cal-msg" style="font-size:12px; font-family:monospace; font-weight:bold;">READY</div></div>
-    <div class="controls">
-      <span style="font-size:12px; color:#aaa; align-self:center;">REF:</span> 
-      <input id="cx" value="1.00"><input id="cy" value="1.5">
-      <button onclick="calp()" class="btn-primary">CAL T1</button>
-      <button onclick="save()">SAVE T1</button>
-      <button onclick="reset()">RESET T1</button>
-    </div>
+  <div class="header" style="border:none; padding-bottom:0;">
+    <div class="title" style="color:var(--accent);">Tag 1 Calibration</div>
+    <div id="cal-msg" style="font-size:12px; font-family:monospace; font-weight:bold;">READY</div>
+  </div>
+  <div class="controls">
+    <span style="font-size:12px; color:#aaa; align-self:center;">REF:</span> 
+    <input id="cx" type="number" step="0.01" placeholder="X">
+    <input id="cy" type="number" step="0.01" placeholder="Y">
+    
+    <button onclick="calp()" class="btn-primary">CAL T1</button>
+    <button onclick="save()">SAVE T1</button>
+    <button onclick="reset()">RESET T1</button>
   </div>
 </div>
 
 <script>
 const cvs = document.getElementById('cvs'), ctx = cvs.getContext('2d');
-let FIELD_W = 2.0, FIELD_H = 3.0;
-const OFFSET_X = 0.40;   // Tag2 อยู่ด้านขวา Tag1 40cm
+// บรรทัด 129: แก้ FIELD_W ให้เป็น 3.0 และ FIELD_H เป็น 2.0
+let FIELD_W = 3.0, FIELD_H = 2.0; 
+const OFFSET_X = 0.0; // ตั้งค่า Offset เป็น 0 เพื่อให้ Tag1 ตรงกับพิกัดจริง
 
 async function api(path){ const r=await fetch(path); return await r.text(); }
 function calp(){ api(`/calp?x=${document.getElementById('cx').value}&y=${document.getElementById('cy').value}`); }
@@ -190,18 +195,26 @@ function drawMap(j) {
     });
   }
 
-  // DRAW LOGIC: Tag1 & Tag2 (Triangles)
-  if(j.ok || j.x > -0.5) {
-  const t1x = tx(j.x), t1y = ty(j.y);
+ // DRAW LOGIC: แสดงผล Tag1 (จุดจริง) และ Tag2 (จุดเลื่อนไป 40cm)
+if(j.ok || j.x > -0.5) {
+  // 1. กำหนดพิกัดหลักจากบอร์ด (Tag1 คือจุดจริงที่วาง Calibrate)
+  const t1_logic_x = j.x; 
+  const t1_logic_y = j.y;
 
-  // Tag2 offset แนวนอน
-
-  const t2_logic_x = j.x - OFFSET_X;
+  // 2. กำหนดพิกัด Tag2 ให้ห่างจาก Tag1 ออกไป 40 cm (0.40 เมตร)
+  // ตัวอย่างนี้ให้ห่างในแนวแกน X (ถ้าต้องการแกน Y ให้ไปบวกที่ t1_logic_y แทน)
+  const t2_logic_x = j.x + 0.40; 
   const t2_logic_y = j.y;
 
+  // อัปเดตตัวเลขพิกัดบน Dashboard ให้ตรงกับในแผนที่
+  document.getElementById('t1_pos').textContent = j.ok ? `${t1_logic_x.toFixed(2)}, ${t1_logic_y.toFixed(2)}` : "OFFLINE";
+  document.getElementById('t2_pos').textContent = j.ok ? `${t2_logic_x.toFixed(2)}, ${t2_logic_y.toFixed(2)}` : "OFFLINE";
+
+  // 3. แปลงพิกัดเมตรเป็นพิกเซลบนจอ
+  const t1x = tx(t1_logic_x), t1y = ty(t1_logic_y);
   const t2x = tx(t2_logic_x), t2y = ty(t2_logic_y);
 
-  // วาดเส้นเชื่อมระหว่าง Tag
+  // 4. วาดเส้นเชื่อมระหว่าง Tag1 และ Tag2 (Visual Support)
   ctx.beginPath();
   ctx.moveTo(t1x, t1y);
   ctx.lineTo(t2x, t2y);
@@ -209,23 +222,25 @@ function drawMap(j) {
   ctx.strokeStyle = 'rgba(0, 210, 255, 0.4)';
   ctx.stroke();
 
-  // วาดรูปสามเหลี่ยม
-  // แก้ไขจาก true เป็น false เพื่อให้สามเหลี่ยมกลับหัว (ชี้ลง)
-drawTriangle(t1x, t1y, 10, '#3b82f6', 'Tag1 (Front)', 'left');
-drawTriangle(t2x, t2y, 10, '#00d2ff', 'Tag2 (Back)', 'left');
+  // 5. วาดรูปสามเหลี่ยมแสดงตำแหน่ง Tag ทั้งสองจุด
+  drawTriangle(t1x, t1y, 10, '#3b82f6', 'Tag1 (Front)', 'left');
+  drawTriangle(t2x, t2y, 10, '#00d2ff', 'Tag2 (Back)', 'left');
 }
 }
 
 async function tick(){
   try {
     const r = await fetch('/json'); const j = await r.json();
-    document.getElementById('t1_pos').textContent = j.ok ? `${j.x.toFixed(2)}, ${j.y.toFixed(2)}` : "OFFLINE";
-    
-  // ค้นหาและแก้ไขส่วน UI Update สำหรับ Tag 2
-  const t2_ui_x = j.x - OFFSET_X; // เปลี่ยนจาก + เป็น - ให้ตรงกับด้านบน
-  const t2_ui_y = j.y;
-  document.getElementById('t2_pos').textContent =
-    j.ok ? `${t2_ui_x.toFixed(2)}, ${t2_ui_y.toFixed(2)}` : "OFFLINE";
+    const t1_ui_x = j.x - OFFSET_X;
+const t1_ui_y = j.y;
+document.getElementById('t1_pos').textContent =
+  j.ok ? `${t1_ui_x.toFixed(2)}, ${t1_ui_y.toFixed(2)}` : "OFFLINE";
+
+const t2_ui_x = j.x;
+const t2_ui_y = j.y;
+document.getElementById('t2_pos').textContent =
+  j.ok ? `${t2_ui_x.toFixed(2)}, ${t2_ui_y.toFixed(2)}` : "OFFLINE";
+
     
     document.getElementById('rmse').textContent = j.rmse.toFixed(3);
     document.getElementById('status-badge').className = j.ok ? "badge bg-ok" : "badge bg-bad";

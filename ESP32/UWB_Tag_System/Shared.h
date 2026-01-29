@@ -29,11 +29,9 @@ static constexpr float AZ[4] = { 1.60f, 1.60f, 1.60f, 1.60f };
 
 static constexpr bool USE_2D_HEIGHT_CORR = true;
 
-// =================== ANCHOR POSITIONS ===================
-// พิกัด Anchor จะปรับตามค่า FIELD_W และ FIELD_H โดยอัตโนมัติ
-// A1(0,2), A2(3,2), A3(0,0), A4(3,0)
-static constexpr float AX[4] = { 0.00f, 0.00f, 3.00f, 3.00f }; 
-static constexpr float AY[4] = { 0.00f, 2.00f, 0.00f, 2.00f }; // เปลี่ยนค่า AY[2] เป็น 0 และ AY[3] เป็น 2
+// ตรวจสอบพิกัดให้เป็น A1(0,0), A2(0,2), A3(3,0), A4(3,2)
+static constexpr float AX[4] = { 0.00f, 0.00f, 3.00f, 3.00f };
+static constexpr float AY[4] = { 0.00f, 2.00f, 0.00f, 2.00f };
 
 // =================== RANGE VALIDATION ===================
 static constexpr float MIN_RANGE_M = 0.10f;

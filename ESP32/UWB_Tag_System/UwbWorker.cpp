@@ -3,6 +3,8 @@
 #include "DW1000Ranging.h"
 #include "WebWorker.h" // activeIP()
 
+static bool is_saving = false; // ตัวแปรป้องกันการทำงานซ้อนกัน
+
 // =================== Local config ===================
 static const uint32_t PRINT_MS = 400;
 static const int      GN_ITERS = 14;
@@ -281,28 +283,46 @@ void handleSerial() {
     return;
   }
 
-  if (line == "SAVE") {
+ if (line == "SAVE") {
+    is_saving = true; // 1. ล็อคระบบ
+    delay(200);      // 2. รอให้ Task อื่นนิ่ง
+    
     for (int i = 0; i < 4; i++) {
-      if (mp_bias_cnt[i] > 0) bias[i] = (float)(mp_bias_sum[i] / (double)mp_bias_cnt[i]);
+      if (mp_bias_cnt[i] > 0) {
+        bias[i] = (float)(mp_bias_sum[i] / (double)mp_bias_cnt[i]);
+        mp_bias_sum[i] = 0;
+        mp_bias_cnt[i] = 0;
+      }
     }
-    saveBias();
-    Serial.printf("[CAL] saved bias(m): b1=%.3f b2=%.3f b3=%.3f b4=%.3f\n", bias[0], bias[1], bias[2], bias[3]);
+    
+    saveBias();      // 3. เขียนลง Flash
+    delay(500);      // 4. รอให้เขียนเสร็จจริงๆ
+    
+    Serial.println("[CAL] Saved successfully! System will restart in 1s...");
+    delay(1000);
+    
+    // 5. บังคับ Restart (นี่คือวิธีแก้ปัญหา 'เด้งหลุด' ที่ถาวรที่สุดในงาน Engineer)
+    ESP.restart(); 
     return;
   }
 
   if (line == "RESET") {
+    cal_active = false;
     for (int i = 0; i < 4; i++) {
       bias[i] = 0;
       mp_bias_sum[i] = 0;
       mp_bias_cnt[i] = 0;
-      lastAccepted[i] = -1;
       fA[i] = -1;
       buf_fill[i] = 0;
-      buf_i[i] = 0;
     }
+    
+    Serial.println("[CAL] Resetting Flash... please wait.");
+    delay(200); 
     saveBias();
-    cal_state = 4; // >>> UPDATE STATE (Reset Done)
-    Serial.println("[CAL] reset bias=0 and saved.");
+    delay(200); 
+
+    cal_state = 4; // State: Reset Done
+    Serial.println("[CAL] reset done.");
     return;
   }
 
@@ -340,6 +360,9 @@ void setupUWB() {
 
 // =================== LOOP UWB ===================
 void loopUWB() {
+  if (is_saving) { delay(1); return; } // ถ้ากำลังเซฟ ให้หยุดทำงาน UWB ทันที
+
+
   DW1000Ranging.loop();
   handleSerial();
 
@@ -366,7 +389,7 @@ void loopUWB() {
       
       if (cal_cnt[i] > 5) { 
         float avg = (float)(cal_sum[i] / (double)cal_cnt[i]); 
-        newBias[i] = avg - ex[i];
+        newBias[i] = (avg + bias[i]) - ex[i];
         Serial.printf("OK! New Bias = %.3f\n", newBias[i]);
       } else {
         Serial.println("FAIL! (Not enough data)");
