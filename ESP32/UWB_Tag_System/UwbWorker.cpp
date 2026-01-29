@@ -462,7 +462,7 @@ void loopUWB() {
   last_rmse   = okBasic ? rmse : -1;
 
   if (acceptWeak) {
-    // (1) deadband
+    // (1) deadbandc
     const float DEAD_XY = 0.02f;
     if (have_xy) {
       if (fabs(x_raw - x_f) < DEAD_XY) x_raw = x_f;
