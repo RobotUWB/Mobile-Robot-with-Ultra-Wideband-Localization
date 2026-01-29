@@ -16,49 +16,49 @@ static const uint8_t PIN_IRQ = 34;
 static const uint8_t PIN_SS  = 5;
 
 // =================== FIELD CONSTANTS ===================
-static constexpr float FIELD_W = 2.00f; 
-static constexpr float FIELD_H = 3.00f; 
+// ปรับค่าเพื่อให้สนามยาว 3 เมตรในแนวนอน และกว้าง 2 เมตรในแนวตั้ง
+static constexpr float FIELD_W = 3.00f; // ความยาวสนาม (แนวนอน)
+static constexpr float FIELD_H = 2.00f; // ความกว้างสนาม (แนวตั้ง)
 
 // ===== Heights (meters) =====
-// [แก้ไข 1] ตั้งค่า Tag สูง 0.30 เมตร (ตามความจริงบนหุ่นยนต์)
-static constexpr float TAG_Z = 0.30f; 
+// ตั้งค่าความสูง Tag ที่ 0.30 เมตร ตามโครงสร้างหุ่นยนต์จริง
+static constexpr float TAG_Z = 0.30f;
 
-// [เทคนิคแก้จุดไม่เข้ามุม]
-// ค่าจริงคือ 1.60f แต่ถ้าเดินแล้วจุดมันหดเข้ากลาง (ไปไม่ถึงขอบ)
-// ให้ลองลดค่าตรงนี้ลงเหลือ 1.50f หรือ 1.45f เพื่อช่วยดันจุดให้ออกกว้างขึ้นครับ
-static constexpr float AZ[4] = { 1.60f, 1.60f, 1.60f, 1.60f }; 
+// หากพิกัดใน Dashboard หดเข้ากลางสนาม ให้ลองปรับค่า AZ ลดลงเหลือ 1.45f หรือ 1.50f
+static constexpr float AZ[4] = { 1.60f, 1.60f, 1.60f, 1.60f };
 
 static constexpr bool USE_2D_HEIGHT_CORR = true;
 
 // =================== ANCHOR POSITIONS ===================
-static constexpr float AX[4] = { 0.0f, FIELD_W, 0.0f, FIELD_W };
-static constexpr float AY[4] = { FIELD_H, FIELD_H, 0.0f, 0.0f };
+// พิกัด Anchor จะปรับตามค่า FIELD_W และ FIELD_H โดยอัตโนมัติ
+// A1(0,2), A2(3,2), A3(0,0), A4(3,0)
+static constexpr float AX[4] = { 0.00f, 0.00f, 3.00f, 3.00f };
+static constexpr float AY[4] = { 0.00f, 2.00f, 0.00f, 2.00f }; // เปลี่ยนค่า AY[2] เป็น 0 และ AY[3] เป็น 2
 
 // =================== RANGE VALIDATION ===================
-static constexpr float MIN_RANGE_M = 0.10f; 
+static constexpr float MIN_RANGE_M = 0.10f;
 static constexpr float MAX_RANGE_M = 15.00f;
 
 // =================== FILTERING ===================
-static constexpr int MED_N = 5; 
-static constexpr float MAX_JUMP_M = 3.00f; 
+static constexpr int MED_N = 5;
+static constexpr float MAX_JUMP_M = 3.00f;
 
-// [แก้ไข 2] ใช้ค่า Alpha สูง (0.30) เพื่อให้ตำแหน่ง Real-time
-// แก้ปัญหากระตุก/วาป ทำให้จุดวิ่งตามหุ่นทันที
-static constexpr float RANGE_EMA_ALPHA = 0.30f; 
+// เพิ่มค่า Alpha เป็น 0.30 เพื่อให้การตอบสนองระยะทาง Real-time มากขึ้น
+static constexpr float RANGE_EMA_ALPHA = 0.30f;
 
 // =================== XY SMOOTHING ===================
-// [แก้ไข 3] เพิ่มความไวพิกัด X,Y เป็น 0.25 (ค่าเดิม 0.05 มันช้าไปสำหรับหุ่นยนต์)
-static constexpr float XY_ALPHA_BASE = 0.25f; 
-static constexpr float XY_ALPHA_MIN  = 0.10f; 
-static constexpr float XY_ALPHA_MAX  = 0.60f; 
+// เพิ่มความไวพิกัด X, Y เป็น 0.25 เพื่อให้จุดวิ่งตามหุ่นยนต์ทันที
+static constexpr float XY_ALPHA_BASE = 0.25f;
+static constexpr float XY_ALPHA_MIN  = 0.10f;
+static constexpr float XY_ALPHA_MAX  = 0.60f;
 
 // =================== POSITION GATING ===================
-static constexpr float RMSE_GATE_M = 1.00f; 
-static constexpr float RMSE_HARD_M = 2.00f; 
-static constexpr float MAX_STEP_M = 0.50f;  
+static constexpr float RMSE_GATE_M = 1.00f;
+static constexpr float RMSE_HARD_M = 2.00f;
+static constexpr float MAX_STEP_M = 0.50f; 
 
 // =================== TIMING ===================
-// ลด Timeout เหลือ 2.5 วินาที เพื่อให้ระบบตื่นตัวตลอดเวลา
+// ตั้งค่า Timeout ไว้ที่ 2.5 วินาที เพื่อความเสถียรของการเชื่อมต่อ
 static constexpr uint32_t ANCHOR_TIMEOUT_MS = 2500;
 static constexpr uint32_t CAL_MS = 5000;
 
@@ -79,6 +79,7 @@ extern bool last_accept;
 extern int last_n;
 
 extern bool cal_active;
+
 extern bool cal_multi_point;
 extern float cal_ref_x, cal_ref_y;
 extern uint32_t cal_start_ms;
