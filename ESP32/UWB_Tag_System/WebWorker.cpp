@@ -11,57 +11,256 @@ static const IPAddress AP_IP(192, 168, 88, 1);
 static const IPAddress AP_GW(192, 168, 88, 1);
 static const IPAddress AP_SN(255, 255, 255, 0);
 
-// **ต้องตรงกับ Router ที่ Tag 2 เกาะอยู่ (ถ้ามี)**
 static const char *STA_SSID = "GMR";
 static const char *STA_PASS = "12123121211212312121";
 
 WebServer server(80);
 
-// =================== HTML DASHBOARD ===================
-// (ผมย่อส่วน HTML ไว้ เพราะส่วนนี้ถูกต้องแล้ว ไม่ต้องแก้)
+// =================== HTML DASHBOARD (CLEAN VERSION) ===================
 static const char INDEX_HTML[] PROGMEM = R"HTML(
 <!doctype html>
 <html>
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no"/>
-<title>UWB Monitor Pro</title>
+<title>UWB Monitor Pro - Multi Tag</title>
 <style>
-  :root { --bg:#09090b; --text:#e4e4e7; --accent:#3b82f6; }
-  body { font-family:sans-serif; background:var(--bg); color:var(--text); display:flex; flex-direction:column; align-items:center; }
-  h1 { color: var(--accent); }
+  :root { 
+    --bg: #09090b; --card: #18181b; --border: #27272a; 
+    --text: #e4e4e7; --text-dim: #a1a1aa;
+    --accent: #3b82f6; --accent-glow: rgba(59, 130, 246, 0.15);
+    --green: #10b981; --red: #ef4444; --yellow: #eab308;
+    --cyan: #00d2ff;
+  }
+  * { box-sizing: border-box; }
+  body { 
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text); 
+    margin: 0; padding: 16px; 
+    display: flex; flex-direction: column; align-items: center; 
+    min-height: 100vh;
+  }
+  .container { width: 100%; max-width: 1080px; display: flex; flex-direction: column; gap: 16px; }
+  .card { 
+    background: var(--card); border: 1px solid var(--border); 
+    border-radius: 16px; overflow: hidden;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+  }
+  .header {
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+    background: rgba(255,255,255,0.02);
+  }
+  .title { font-size: 14px; font-weight: 600; letter-spacing: 0.5px; color: var(--text-dim); text-transform: uppercase; }
+  #map-wrapper { 
+    position: relative; width: 100%; aspect-ratio: 16/9; 
+    background: radial-gradient(circle at center, #1e1e24 0%, #09090b 100%);
+    border-bottom: 1px solid var(--border);
+  }
+  canvas { display: block; width: 100%; height: 100%; }
+  .badge { padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: 700; font-family: monospace; }
+  .bg-ok { background: rgba(16, 185, 129, 0.2); color: var(--green); border: 1px solid rgba(16, 185, 129, 0.3); }
+  .bg-bad { background: rgba(239, 68, 68, 0.2); color: var(--red); border: 1px solid rgba(239, 68, 68, 0.3); }
+  .stats-row { display: flex; divide-x: 1px solid var(--border); }
+  .stat-item { flex: 1; padding: 16px; text-align: center; border-right: 1px solid var(--border); }
+  .stat-item:last-child { border-right: none; }
+  .stat-label { font-size: 11px; color: var(--text-dim); margin-bottom: 4px; text-transform: uppercase; }
+  .stat-val { font-family: monospace; font-size: 20px; font-weight: 700; color: var(--text); }
+  .anchor-list { padding: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .anchor-item { display: flex; justify-content: space-between; padding-bottom: 8px; border-bottom: 1px solid var(--border); font-family: monospace; font-size: 13px; }
+  .an-name { color: var(--text-dim); }
+  .an-val { color: var(--accent); font-weight: bold; }
+  .controls { padding: 16px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; background: #131316; }
+  input { 
+    background: #000; border: 1px solid var(--border); color: #fff; 
+    padding: 8px; border-radius: 8px; width: 80px; text-align: center; font-family: monospace;
+  }
+  button { 
+    background: #27272a; border: 1px solid var(--border); color: #fff; 
+    padding: 8px 16px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 12px;
+  }
+  button:hover { background: #3f3f46; border-color: #52525b; }
+  .btn-primary { background: var(--accent); border-color: var(--accent); }
 </style>
 </head>
 <body>
-<h1>UWB Local Dashboard</h1>
-<p>Please use the React Main Dashboard to view data.</p>
+<div class="container">
+  <div class="card">
+    <div class="header">
+      <div class="title">Live Position Tracking</div>
+      <div id="status-badge" class="badge bg-bad">OFFLINE</div>
+    </div>
+    <div id="map-wrapper"><canvas id="cvs"></canvas></div>
+    <div class="stats-row">
+      <div class="stat-item"><div class="stat-label">Tag 1 (Front)</div><div class="stat-val"><span id="t1_pos">-</span></div></div>
+      <div class="stat-item"><div class="stat-label">Tag 2 (Back)</div><div class="stat-val" style="color:var(--cyan)"><span id="t2_pos">-</span></div></div>
+      <div class="stat-item"><div class="stat-label">RMSE</div><div class="stat-val" style="color:var(--green)"><span id="rmse">-</span></div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="header"><div class="title">Anchor Status</div></div>
+    <div class="anchor-list">
+      <div class="anchor-item"><span class="an-name">A1 (0x84)</span> <span id="a1" class="an-val">-</span></div>
+      <div class="anchor-item"><span class="an-name">A2 (0x85)</span> <span id="a2" class="an-val">-</span></div>
+      <div class="anchor-item"><span class="an-name">A3 (0x86)</span> <span id="a3" class="an-val">-</span></div>
+      <div class="anchor-item"><span class="an-name">A4 (0x87)</span> <span id="a4" class="an-val">-</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="header" style="border:none; padding-bottom:0;"><div class="title" style="color:var(--accent);">Tag 1 Calibration</div><div id="cal-msg" style="font-size:12px; font-family:monospace; font-weight:bold;">READY</div></div>
+    <div class="controls">
+      <span style="font-size:12px; color:#aaa; align-self:center;">REF:</span> 
+      <input id="cx" value="1.00"><input id="cy" value="1.5">
+      <button onclick="calp()" class="btn-primary">CAL T1</button>
+      <button onclick="save()">SAVE T1</button>
+      <button onclick="reset()">RESET T1</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const cvs = document.getElementById('cvs'), ctx = cvs.getContext('2d');
+let FIELD_W = 2.0, FIELD_H = 3.0;
+const OFFSET_X = 0.40;   // Tag2 อยู่ด้านขวา Tag1 40cm
+
+async function api(path){ const r=await fetch(path); return await r.text(); }
+function calp(){ api(`/calp?x=${document.getElementById('cx').value}&y=${document.getElementById('cy').value}`); }
+function save(){ api(`/save`); }
+function reset(){ api(`/reset`); }
+
+// ฟังก์ชันวาดรูปสามเหลี่ยม
+function drawTriangle(x, y, size, color, label, direction) {
+  ctx.beginPath();
+  if(direction === 'left') {
+    ctx.moveTo(x - size, y);          // ยอดแหลมไปทางซ้าย
+    ctx.lineTo(x + size, y - size);   // มุมขวาบน
+    ctx.lineTo(x + size, y + size);   // มุมขวาล่าง
+  } else {
+    // โค้ดเดิมสำหรับชี้ขึ้น/ลง (ถ้ายังอยากเก็บไว้)
+    if(direction === true) {
+      ctx.moveTo(x, y - size);
+      ctx.lineTo(x - size, y + size);
+      ctx.lineTo(x + size, y + size);
+    } else {
+      ctx.moveTo(x, y + size);
+      ctx.lineTo(x - size, y - size);
+      ctx.lineTo(x + size, y - size);
+    }
+  }
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.fillText(label, x, y + 35); // ปรับตำแหน่งข้อความให้อยู่ใต้รูป
+}
+
+function drawMap(j) {
+  const wrapper = document.getElementById('map-wrapper');
+  const dpr = window.devicePixelRatio || 1;
+  if(cvs.width !== wrapper.clientWidth * dpr){ cvs.width = wrapper.clientWidth * dpr; cvs.height = wrapper.clientHeight * dpr; ctx.scale(dpr, dpr); }
+  const W = wrapper.clientWidth, H = wrapper.clientHeight;
+  if(j.field){ FIELD_W = j.field.w; FIELD_H = j.field.h; }
+
+  // ระยะเว้นจากขอบ Canvas เข้ามาด้านใน (พิกเซล) ยิ่งน้อยสนามยิ่งใหญ่เต็มจอ
+  const pad = 60;
+
+  const sc = Math.min((W - pad*2) / FIELD_W, (H - pad*2) / FIELD_H);
+  const ox = (W - (FIELD_W * sc)) / 2, oy = (H - (FIELD_H * sc)) / 2;
+  const tx = (x) => ox + (x * sc), ty = (y) => H - oy - (y * sc);
+
+  ctx.clearRect(0,0,W,H);
+
+  // วาดเฉพาะขอบสนาม (ลบ Loop ตารางออกแล้ว)
+  ctx.strokeStyle = '#27272a'; 
+  ctx.strokeRect(tx(0), ty(FIELD_H), FIELD_W * sc, FIELD_H * sc);
+
+  // Anchors
+  if(j.anch_xy) {
+    ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
+    j.anch_xy.forEach((p, i) => {
+      const ax = tx(p[0]), ay = ty(p[1]);
+      const isOk = (j.a && parseFloat(j.a[i]) > 0);
+      ctx.fillStyle = isOk ? '#10b981' : '#3f3f46';
+      ctx.beginPath(); ctx.arc(ax, ay, 5, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = isOk ? '#10b981' : '#71717a'; 
+      ctx.fillText(`A${i+1} ${j.a?j.a[i]:'-'}m`, ax, (p[1]>FIELD_H/2)?ay-25:ay+25);
+    });
+  }
+
+ // DRAW LOGIC: (SWAPPED) Tag1 <-> Tag2
+if(j.ok || j.x > -0.5) {
+
+  // Tag1 = จุด offset (เดิมเป็น Tag2)
+  const t1_logic_x = j.x - OFFSET_X;
+  const t1_logic_y = j.y;
+
+  // Tag2 = จุดจริง (เดิมเป็น Tag1)
+  const t2_logic_x = j.x;
+  const t2_logic_y = j.y;
+
+  const t1x = tx(t1_logic_x), t1y = ty(t1_logic_y);
+  const t2x = tx(t2_logic_x), t2y = ty(t2_logic_y);
+
+  ctx.beginPath();
+  ctx.moveTo(t1x, t1y);
+  ctx.lineTo(t2x, t2y);
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = 'rgba(0, 210, 255, 0.4)';
+  ctx.stroke();
+
+  drawTriangle(t1x, t1y, 10, '#3b82f6', 'Tag1 (Front)', 'left');
+  drawTriangle(t2x, t2y, 10, '#00d2ff', 'Tag2 (Back)', 'left');
+}
+}
+
+async function tick(){
+  try {
+    const r = await fetch('/json'); const j = await r.json();
+    const t1_ui_x = j.x - OFFSET_X;
+const t1_ui_y = j.y;
+document.getElementById('t1_pos').textContent =
+  j.ok ? `${t1_ui_x.toFixed(2)}, ${t1_ui_y.toFixed(2)}` : "OFFLINE";
+
+const t2_ui_x = j.x;
+const t2_ui_y = j.y;
+document.getElementById('t2_pos').textContent =
+  j.ok ? `${t2_ui_x.toFixed(2)}, ${t2_ui_y.toFixed(2)}` : "OFFLINE";
+
+    
+    document.getElementById('rmse').textContent = j.rmse.toFixed(3);
+    document.getElementById('status-badge').className = j.ok ? "badge bg-ok" : "badge bg-bad";
+    document.getElementById('status-badge').textContent = j.ok ? "ONLINE" : "SEARCHING";
+    if(j.a) j.a.forEach((v,i)=>document.getElementById('a'+(i+1)).textContent=v+" m");
+    const ms=document.getElementById('cal-msg');
+    ms.textContent=["READY","CALIBRATING...","SUCCESS!","FAILED","RESET DONE"][j.cs]||"READY";
+    ms.style.color=["#aaa","#eab308","#10b981","#ef4444","#3b82f6"][j.cs]||"#aaa";
+    drawMap(j);
+  } catch(e){}
+  setTimeout(tick, 200);
+}
+tick();
+</script>
 </body>
 </html>
 )HTML";
 
 // =================== IMPLEMENTATION ===================
-
 IPAddress activeIP() {
   if (WiFi.status() == WL_CONNECTED) return WiFi.localIP();
   return WiFi.softAPIP();
 }
 
 static void handleIndex() { 
-  server.sendHeader("Access-Control-Allow-Origin", "*");
   server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   server.send_P(200, "text/html", INDEX_HTML); 
 }
 
-static void handleInfo() { 
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.send(200, "text/plain", "UWB System Online"); 
-}
+static void handleInfo() { server.send(200, "text/plain", "UWB System Online"); }
 
-// ฟังก์ชันส่ง JSON (แก้ CORS ให้แล้ว)
 static void handleJson() {
-  // ใส่ Header ตรงนี้ เพื่อให้ React เครื่องอื่นดึงได้
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  
   String json = "{";
   json += "\"x\":" + String(have_xy ? x_f : -1.0f, 3) + ",";
   json += "\"y\":" + String(have_xy ? y_f : -1.0f, 3) + ",";
@@ -70,23 +269,17 @@ static void handleJson() {
   json += "\"ok\":" + String(last_accept ? 1 : 0) + ",";
   
   bool t2_online = (millis() - t2_last_ms < 3000); 
-  json += "\"t2\":{";
-  json += "\"ok\":" + String(t2_online ? 1 : 0) + ",";
-  json += "\"x\":" + String(t2_x, 2) + ",";
-  json += "\"y\":" + String(t2_y, 2);
-  json += "},";
+  json += "\"t2\":{\"ok\":" + String(t2_online ? 1 : 0) + ",\"x\":" + String(t2_x, 2) + ",\"y\":" + String(t2_y, 2) + "},";
 
   json += "\"cs\":" + String(cal_state) + ","; 
   json += "\"a\":[\"" + anchorString(0) + "\",\"" + anchorString(1) + "\",\"" + anchorString(2) + "\",\"" + anchorString(3) + "\"],";
   json += "\"field\":{\"w\":" + String(FIELD_W, 2) + ",\"h\":" + String(FIELD_H, 2) + "},";
   
-  json += "\"anch_xy\":[";
-  for(int i=0; i<4; i++) {
-    json += "[" + String(AX[i], 2) + "," + String(AY[i], 2) + "]";
-    if(i<3) json += ",";
-  }
-  json += "]}";
+  // แก้ไขพิกัดให้ตรงตามตำแหน่งติดตั้งจริง (A1-A4)
+  // [0]=A1(0,0), [1]=A2(0,2), [2]=A3(3,2), [3]=A4(3,0)
+  json += "\"anch_xy\":[[0.0,0.0],[0.0,2.0],[3.0,0.0],[3.0,2.0]]";
   
+  json += "}";
   server.send(200, "application/json", json);
 }
 
@@ -98,170 +291,40 @@ static void calStart(bool multi, float x, float y) {
 }
 
 static void handleCalCommon(bool multi) {
-  server.sendHeader("Access-Control-Allow-Origin", "*"); // เพิ่ม CORS
   if (!server.hasArg("x")) return;
   float valX = server.arg("x").toFloat();
   float valY = server.arg("y").toFloat();
-  if(valX == 0 && valY == 0) { valX = 1.00f; valY = 1.5f; }
-  
   calStart(multi, valX, valY);
   server.send(200, "text/plain", "OK");
 }
 
 static void handleSave() {
-  server.sendHeader("Access-Control-Allow-Origin", "*"); // เพิ่ม CORS
-  // [SAFETY] อัปเดตตัวแปรใน RAM ให้เสร็จก่อน
-  for (int i = 0; i < 4; i++) {
-    if (mp_bias_cnt[i] > 0) {
-      bias[i] = mp_bias_sum[i] / mp_bias_cnt[i];
-    }
-  }
-  // เขียนลง Flash
+  for (int i = 0; i < 4; i++) if (mp_bias_cnt[i] > 0) bias[i] = mp_bias_sum[i] / mp_bias_cnt[i];
   saveBias(); 
   server.send(200, "text/plain", "Saved");
 }
 
 static void handleReset() {
-  server.sendHeader("Access-Control-Allow-Origin", "*"); // เพิ่ม CORS
-  // [SAFETY] เคลียร์ตัวแปร Runtime ก่อน
-  for (int i = 0; i < 4; i++) { 
-    bias[i] = 0; 
-    mp_bias_sum[i] = 0; 
-    mp_bias_cnt[i] = 0;
-    fA[i] = -1;
-    lastAccepted[i] = -1;
-  }
-  
+  for (int i = 0; i < 4; i++) { bias[i] = 0; mp_bias_sum[i] = 0; mp_bias_cnt[i] = 0; fA[i] = -1; lastAccepted[i] = -1; }
   saveBias(); 
-  cal_state = 4; // State: RESET DONE
-  last_rmse = -1; 
-  
+  cal_state = 4;
   server.send(200, "text/plain", "Reset");
 }
 
-// ----------------------------------------------
-// TAG 2 COMMAND HANDLERS (ESP-NOW)
-// ----------------------------------------------
-typedef struct struct_cmd {
-  int cmd_id;     // 1=CAL, 2=SAVE, 3=RESET
-  float ref_x;
-  float ref_y;
-} struct_cmd;
-
-void sendCommandToTag2(int cmd, float x, float y) {
-  uint8_t tag2_mac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}; // Broadcast
-  
-  if (!esp_now_is_peer_exist(tag2_mac)) {
-    esp_now_peer_info_t peerInfo;
-    memset(&peerInfo, 0, sizeof(peerInfo));
-    memcpy(peerInfo.peer_addr, tag2_mac, 6);
-    peerInfo.channel = WiFi.channel(); 
-    peerInfo.encrypt = false;
-    
-    if (esp_now_add_peer(&peerInfo) != ESP_OK) {
-      Serial.println("[CMD] Failed to add peer!");
-      return; 
-    }
-  }
-
-  struct_cmd myCmd;
-  myCmd.cmd_id = cmd;
-  myCmd.ref_x = x;
-  myCmd.ref_y = y;
-  
-  esp_err_t result = esp_now_send(tag2_mac, (uint8_t *) &myCmd, sizeof(myCmd)); 
-  if (result == ESP_OK) {
-    Serial.printf("[CMD] Sent to Tag 2: Cmd=%d\n", cmd);
-  } else {
-    Serial.printf("[CMD] Send Error: %d\n", result);
-  }
-}
-
-static void handleCalT2() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  float valX = 1.00f; 
-  float valY = 0.85f;
-  if (server.hasArg("x")) valX = server.arg("x").toFloat();
-  if (server.hasArg("y")) valY = server.arg("y").toFloat();
-  sendCommandToTag2(1, valX, valY);
-  server.send(200, "text/plain", "CMD_SENT");
-}
-
-static void handleSaveT2() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  sendCommandToTag2(2, 0, 0);
-  server.send(200, "text/plain", "SAVE_SENT");
-}
-
-static void handleResetT2() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  sendCommandToTag2(3, 0, 0); 
-  server.send(200, "text/plain", "RESET_SENT");
-}
-
-// ----------------------------------------------
-// NEW: COMMAND HANDLER FOR REACT (STOP/PAUSE)
-// ----------------------------------------------
-static void handleCommand() {
-  // CORS Headers สำคัญมากสำหรับ React
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.sendHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
-
-  if (server.method() == HTTP_OPTIONS) {
-    server.send(204); // OK for pre-flight
-    return;
-  }
-
-  if (server.hasArg("plain")) {
-    String body = server.arg("plain");
-    Serial.print("Web Command: "); Serial.println(body);
-    
-    // ใส่ Logic การควบคุมหุ่นยนต์ตรงนี้
-    if (body.indexOf("STOP") >= 0) {
-       Serial.println("!!! EMERGENCY STOP !!!");
-       // TODO: ใส่โค้ดสั่งหยุดมอเตอร์ที่นี่
-    }
-    else if (body.indexOf("PAUSE") >= 0) {
-       Serial.println(">>> PAUSE ROBOT <<<");
-    }
-    else if (body.indexOf("RESUME") >= 0) {
-       Serial.println(">>> RESUME ROBOT <<<");
-    }
-  }
-  server.send(200, "application/json", "{\"status\":\"ok\"}");
-}
-
-static void wifiStart_AP_STA() {
+void setupWeb() {
   WiFi.mode(WIFI_AP_STA);
   WiFi.softAPConfig(AP_IP, AP_GW, AP_SN);
   WiFi.softAP(AP_SSID, AP_PASS);
   WiFi.begin(STA_SSID, STA_PASS);
-}
-
-void setupWeb() {
-  wifiStart_AP_STA();
   
   server.on("/", handleIndex);
   server.on("/json", handleJson);
   server.on("/info", handleInfo);
-  
-  // Register Command Handler (สำคัญ)
-  server.on("/cmd", HTTP_ANY, handleCommand);
-
   server.on("/cal", []() { handleCalCommon(false); });
   server.on("/calp", []() { handleCalCommon(true); });
   server.on("/save", handleSave);
   server.on("/reset", handleReset);
-  
-  server.on("/cal_t2", handleCalT2);
-  server.on("/save_t2", handleSaveT2);
-  server.on("/reset_t2", handleResetT2);
-  
   server.begin();
-  Serial.println("Web Server Started");
 }
 
-void loopWeb() {
-  server.handleClient();
-}
+void loopWeb() { server.handleClient(); }

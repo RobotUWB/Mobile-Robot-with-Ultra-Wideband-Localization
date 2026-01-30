@@ -1,319 +1,511 @@
-#include "WebWorker.h"
+#include "UwbWorker.h"
 #include "Shared.h"
-#include <WiFi.h>
-#include <WebServer.h>
-#include <esp_now.h> 
+#include "DW1000Ranging.h"
+#include "WebWorker.h" // activeIP()
 
-// =================== WIFI CONFIG ===================
-static const char *AP_SSID = "UWB_TAG1_ESP32";
-static const char *AP_PASS = "12345678";
-static const IPAddress AP_IP(192, 168, 88, 1);
-static const IPAddress AP_GW(192, 168, 88, 1);
-static const IPAddress AP_SN(255, 255, 255, 0);
+// =================== Local config ===================
+static const uint32_t PRINT_MS = 400;
+static const int      GN_ITERS = 14;
+static const float    GN_EPS   = 1e-4f;
 
-static const char *STA_SSID = "GMR";
-static const char *STA_PASS = "12123121211212312121";
+// Median ring buffer per anchor
+static float buf[4][MED_N];
+static int   buf_i[4]    = {0,0,0,0};
+static int   buf_fill[4] = {0,0,0,0};
 
-WebServer server(80);
-
-// =================== HTML DASHBOARD (CLEAN VERSION) ===================
-static const char INDEX_HTML[] PROGMEM = R"HTML(
-<!doctype html>
-<html>
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no"/>
-<title>UWB Monitor Pro - Multi Tag</title>
-<style>
-  :root { 
-    --bg: #09090b; --card: #18181b; --border: #27272a; 
-    --text: #e4e4e7; --text-dim: #a1a1aa;
-    --accent: #3b82f6; --accent-glow: rgba(59, 130, 246, 0.15);
-    --green: #10b981; --red: #ef4444; --yellow: #eab308;
-    --cyan: #00d2ff;
-  }
-  * { box-sizing: border-box; }
-  body { 
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    background: var(--bg); color: var(--text); 
-    margin: 0; padding: 16px; 
-    display: flex; flex-direction: column; align-items: center; 
-    min-height: 100vh;
-  }
-  .container { width: 100%; max-width: 1080px; display: flex; flex-direction: column; gap: 16px; }
-  .card { 
-    background: var(--card); border: 1px solid var(--border); 
-    border-radius: 16px; overflow: hidden;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
-  }
-  .header {
-    padding: 12px 16px; border-bottom: 1px solid var(--border);
-    display: flex; justify-content: space-between; align-items: center;
-    background: rgba(255,255,255,0.02);
-  }
-  .title { font-size: 14px; font-weight: 600; letter-spacing: 0.5px; color: var(--text-dim); text-transform: uppercase; }
-  #map-wrapper { 
-    position: relative; width: 100%; aspect-ratio: 16/9; 
-    background: radial-gradient(circle at center, #1e1e24 0%, #09090b 100%);
-    border-bottom: 1px solid var(--border);
-  }
-  canvas { display: block; width: 100%; height: 100%; }
-  .badge { padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: 700; font-family: monospace; }
-  .bg-ok { background: rgba(16, 185, 129, 0.2); color: var(--green); border: 1px solid rgba(16, 185, 129, 0.3); }
-  .bg-bad { background: rgba(239, 68, 68, 0.2); color: var(--red); border: 1px solid rgba(239, 68, 68, 0.3); }
-  .stats-row { display: flex; divide-x: 1px solid var(--border); }
-  .stat-item { flex: 1; padding: 16px; text-align: center; border-right: 1px solid var(--border); }
-  .stat-item:last-child { border-right: none; }
-  .stat-label { font-size: 11px; color: var(--text-dim); margin-bottom: 4px; text-transform: uppercase; }
-  .stat-val { font-family: monospace; font-size: 20px; font-weight: 700; color: var(--text); }
-  .anchor-list { padding: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .anchor-item { display: flex; justify-content: space-between; padding-bottom: 8px; border-bottom: 1px solid var(--border); font-family: monospace; font-size: 13px; }
-  .an-name { color: var(--text-dim); }
-  .an-val { color: var(--accent); font-weight: bold; }
-  .controls { padding: 16px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; background: #131316; }
-  input { 
-    background: #000; border: 1px solid var(--border); color: #fff; 
-    padding: 8px; border-radius: 8px; width: 80px; text-align: center; font-family: monospace;
-  }
-  button { 
-    background: #27272a; border: 1px solid var(--border); color: #fff; 
-    padding: 8px 16px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 12px;
-  }
-  button:hover { background: #3f3f46; border-color: #52525b; }
-  .btn-primary { background: var(--accent); border-color: var(--accent); }
-</style>
-</head>
-<body>
-<div class="container">
-  <div class="card">
-    <div class="header">
-      <div class="title">Live Position Tracking</div>
-      <div id="status-badge" class="badge bg-bad">OFFLINE</div>
-    </div>
-    <div id="map-wrapper"><canvas id="cvs"></canvas></div>
-    <div class="stats-row">
-      <div class="stat-item"><div class="stat-label">Tag 1 (Front)</div><div class="stat-val"><span id="t1_pos">-</span></div></div>
-      <div class="stat-item"><div class="stat-label">Tag 2 (Back)</div><div class="stat-val" style="color:var(--cyan)"><span id="t2_pos">-</span></div></div>
-      <div class="stat-item"><div class="stat-label">RMSE</div><div class="stat-val" style="color:var(--green)"><span id="rmse">-</span></div></div>
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="header"><div class="title">Anchor Status</div></div>
-    <div class="anchor-list">
-      <div class="anchor-item"><span class="an-name">A1 (0x84)</span> <span id="a1" class="an-val">-</span></div>
-      <div class="anchor-item"><span class="an-name">A2 (0x85)</span> <span id="a2" class="an-val">-</span></div>
-      <div class="anchor-item"><span class="an-name">A3 (0x86)</span> <span id="a3" class="an-val">-</span></div>
-      <div class="anchor-item"><span class="an-name">A4 (0x87)</span> <span id="a4" class="an-val">-</span></div>
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="header" style="border:none; padding-bottom:0;"><div class="title" style="color:var(--accent);">Tag 1 Calibration</div><div id="cal-msg" style="font-size:12px; font-family:monospace; font-weight:bold;">READY</div></div>
-    <div class="controls">
-      <span style="font-size:12px; color:#aaa; align-self:center;">REF:</span> 
-      <input id="cx" value="1.00"><input id="cy" value="1.5">
-      <button onclick="calp()" class="btn-primary">CAL T1</button>
-      <button onclick="save()">SAVE T1</button>
-      <button onclick="reset()">RESET T1</button>
-    </div>
-  </div>
-</div>
-
-<script>
-const cvs = document.getElementById('cvs'), ctx = cvs.getContext('2d');
-let FIELD_W = 2.0, FIELD_H = 3.0;
-const OFFSET_X = 0.40;   // Tag2 อยู่ด้านขวา Tag1 40cm
-
-async function api(path){ const r=await fetch(path); return await r.text(); }
-function calp(){ api(`/calp?x=${document.getElementById('cx').value}&y=${document.getElementById('cy').value}`); }
-function save(){ api(`/save`); }
-function reset(){ api(`/reset`); }
-
-// ฟังก์ชันวาดรูปสามเหลี่ยม
-function drawTriangle(x, y, size, color, label, isUp) {
-  ctx.beginPath();
-  if(isUp) {
-    ctx.moveTo(x, y - size);
-    ctx.lineTo(x - size, y + size);
-    ctx.lineTo(x + size, y + size);
-  } else {
-    ctx.moveTo(x, y + size);
-    ctx.lineTo(x - size, y - size);
-    ctx.lineTo(x + size, y - size);
-  }
-  ctx.closePath();
-  ctx.fillStyle = color;
-  ctx.fill();
-  ctx.fillStyle = '#fff';
-  ctx.textAlign = 'center';
-  ctx.fillText(label, x, isUp ? y - 25 : y + 35);
+// =================== SMALL HELPERS ===================
+static inline float clampf(float v, float lo, float hi) {
+  if (v < lo) return lo;
+  if (v > hi) return hi;
+  return v;
 }
 
-function drawMap(j) {
-  const wrapper = document.getElementById('map-wrapper');
-  const dpr = window.devicePixelRatio || 1;
-  if(cvs.width !== wrapper.clientWidth * dpr){ cvs.width = wrapper.clientWidth * dpr; cvs.height = wrapper.clientHeight * dpr; ctx.scale(dpr, dpr); }
-  const W = wrapper.clientWidth, H = wrapper.clientHeight;
-  if(j.field){ FIELD_W = j.field.w; FIELD_H = j.field.h; }
+bool validRange(float d) {
+  return (!isnan(d)) && (d >= MIN_RANGE_M && d <= MAX_RANGE_M);
+}
 
-  // ระยะเว้นจากขอบ Canvas เข้ามาด้านใน (พิกเซล) ยิ่งน้อยสนามยิ่งใหญ่เต็มจอ
-  const pad = 60;
+float hypot2(float dx, float dy) {
+  return sqrtf(dx*dx + dy*dy);
+}
 
-  const sc = Math.min((W - pad*2) / FIELD_W, (H - pad*2) / FIELD_H);
-  const ox = (W - (FIELD_W * sc)) / 2, oy = (H - (FIELD_H * sc)) / 2;
-  const tx = (x) => ox + (x * sc), ty = (y) => H - oy - (y * sc);
+String anchorString(int idx) {
+  if (aStat[idx] == -2) return String("-2");         // rejected by gate
+  if (!validRange(fA[idx])) return String("-1");     // no data/timeout
+  float v = fA[idx]; 
+  return String(v, 2);
+}
 
-  ctx.clearRect(0,0,W,H);
+// EMA update for RANGE (per anchor)
+static inline float emaUpdateRange(float prev, float x) {
+  if (!validRange(prev)) return x;
+  return prev + RANGE_EMA_ALPHA * (x - prev);
+}
 
-  // วาดเฉพาะขอบสนาม (ลบ Loop ตารางออกแล้ว)
-  ctx.strokeStyle = '#27272a'; 
-  ctx.strokeRect(tx(0), ty(FIELD_H), FIELD_W * sc, FIELD_H * sc);
+// 3D -> 2D flatten (horizontal distance) using known heights
+static inline bool flattenRange2D(int id, float r3, float &r2) {
+  if (!validRange(r3)) return false;
+  if (!USE_2D_HEIGHT_CORR) { r2 = r3; return true; }
 
-  // Anchors
-  if(j.anch_xy) {
-    ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
-    j.anch_xy.forEach((p, i) => {
-      const ax = tx(p[0]), ay = ty(p[1]);
-      const isOk = (j.a && parseFloat(j.a[i]) > 0);
-      ctx.fillStyle = isOk ? '#10b981' : '#3f3f46';
-      ctx.beginPath(); ctx.arc(ax, ay, 5, 0, Math.PI*2); ctx.fill();
-      ctx.fillStyle = isOk ? '#10b981' : '#71717a'; 
-      ctx.fillText(`A${i+1} ${j.a?j.a[i]:'-'}m`, ax, (p[1]>FIELD_H/2)?ay-25:ay+25);
-    });
+  const float dz  = AZ[id] - TAG_Z;
+  const float r32 = r3 * r3;
+  const float dz2 = dz * dz;
+
+  // guard: if r3 <= dz -> sqrt negative (tag almost under anchor height)
+  if (r32 <= dz2 + 1e-4f) return false;
+
+  r2 = sqrtf(r32 - dz2);
+
+  // guard: too close tends to multipath
+  if (r2 < 0.25f) return false;
+  return true;
+}
+
+static int idFromShort(uint16_t sa) {
+  // SA Mapping
+  if (sa == 0x84) return 0; // SA_A1
+  if (sa == 0x85) return 1; // SA_A2
+  if (sa == 0x86) return 2; // SA_A3
+  if (sa == 0x87) return 3; // SA_A4
+  return -1;
+}
+
+static float medianN(const float *a, int n) {
+  float t[MED_N];
+  for (int i = 0; i < n; i++) t[i] = a[i];
+  for (int i = 0; i < n - 1; i++) {
+    for (int j = i + 1; j < n; j++) {
+      if (t[j] < t[i]) {
+        float tmp = t[i]; t[i] = t[j]; t[j] = tmp;
+      }
+    }
+  }
+  return t[n / 2];
+}
+
+static int countValidAnchors() {
+  int n = 0;
+  for (int i = 0; i < 4; i++)
+    if (validRange(fA[i])) n++;
+  return n;
+}
+
+// =================== STORAGE ===================
+void loadBias() {
+  prefs.begin("uwbcal1", true);
+  bias[0] = prefs.getFloat("b1", 0.0f);
+  bias[1] = prefs.getFloat("b2", 0.0f);
+  bias[2] = prefs.getFloat("b3", 0.0f);
+  bias[3] = prefs.getFloat("b4", 0.0f);
+  prefs.end();
+}
+
+void saveBias() {
+  prefs.begin("uwbcal1", false);
+  prefs.putFloat("b1", bias[0]);
+  prefs.putFloat("b2", bias[1]);
+  prefs.putFloat("b3", bias[2]);
+  prefs.putFloat("b4", bias[3]);
+  prefs.end();
+}
+
+// =================== POSITION SMOOTHING ===================
+static float computePosAlpha(int n, float rmse) {
+  float a = XY_ALPHA_BASE;
+
+  if (n >= 4) a += 0.05f;
+  else if (n == 3) a -= 0.03f;
+
+  if (rmse >= 0) {
+    if (rmse < 0.03f)      a += 0.18f;
+    else if (rmse < 0.06f) a += 0.10f;
+    else if (rmse < 0.10f) a += 0.04f;
+    else if (rmse > 0.18f) a -= 0.14f;
+    else if (rmse > 0.12f) a -= 0.08f;
   }
 
-  // DRAW LOGIC: Tag1 & Tag2 (Triangles)
-  if(j.ok || j.x > -0.5) {
-  const t1x = tx(j.x), t1y = ty(j.y);
-
-  // Tag2 offset แนวนอน
-  const t2_logic_x = j.x + OFFSET_X;
-  const t2_logic_y = j.y;
-
-  const t2x = tx(t2_logic_x), t2y = ty(t2_logic_y);
-
-  ctx.beginPath();
-  ctx.moveTo(t1x, t1y);
-  ctx.lineTo(t2x, t2y);
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = 'rgba(0, 210, 255, 0.4)';
-  ctx.setLineDash([5,5]);
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  drawTriangle(t1x, t1y, 10, '#3b82f6', 'Tag1 (Front)', true);
-  drawTriangle(t2x, t2y, 10, '#00d2ff', 'Tag2 (Back)', false);
-}
+  return clampf(a, XY_ALPHA_MIN, XY_ALPHA_MAX);
 }
 
-async function tick(){
-  try {
-    const r = await fetch('/json'); const j = await r.json();
-    document.getElementById('t1_pos').textContent = j.ok ? `${j.x.toFixed(2)}, ${j.y.toFixed(2)}` : "OFFLINE";
+// =================== MATH / SOLVER ===================
+static bool solveXY_GN(const Meas *m, int n, float &x, float &y, float &rmse, float x0, float y0) {
+  if (n < 3) return false;
+  float xx = x0;
+  float yy = y0;
+
+  for (int it = 0; it < GN_ITERS; ++it) {
+    float a11 = 0, a12 = 0, a22 = 0;
+    float b1  = 0, b2  = 0;
+
+    for (int i = 0; i < n; i++) {
+      float dx = xx - m[i].ax;
+      float dy = yy - m[i].ay;
+      float di = sqrtf(dx * dx + dy * dy);
+      if (di < 1e-6f) di = 1e-6f;
+
+      float ri = di - m[i].r;
+      float jx = dx / di;
+      float jy = dy / di;
+
+      a11 += jx * jx;
+      a12 += jx * jy;
+      a22 += jy * jy;
+      b1  += jx * ri;
+      b2  += jy * ri;
+    }
+
+    float det = a11 * a22 - a12 * a12;
+    if (fabs(det) < 1e-9f) break;
+
+    float dxx = (a22 * b1 - a12 * b2) / det;
+    float dyy = (-a12 * b1 + a11 * b2) / det;
+
+    xx -= dxx;
+    yy -= dyy;
+
+    if (fabs(dxx) < GN_EPS && fabs(dyy) < GN_EPS) break;
+  }
+
+  float sse = 0;
+  for (int i = 0; i < n; i++) {
+    float di = hypot2(xx - m[i].ax, yy - m[i].ay);
+    float ri = di - m[i].r;
+    sse += ri * ri;
+  }
+
+  rmse = sqrtf(sse / n);
+  x = xx;
+  y = yy;
+  return true;
+}
+
+static int worstResidualIndex(const Meas *m, int n, float x, float y) {
+  int wi = -1;
+  float wabs = -1;
+  for (int i = 0; i < n; i++) {
+    float di = hypot2(x - m[i].ax, y - m[i].ay);
+    float ri = di - m[i].r;
+    float a  = fabs(ri);
+    if (a > wabs) { wabs = a; wi = i; }
+  }
+  return wi;
+}
+
+// =================== DW1000 CALLBACKS ===================
+void newRange() {
+  uint16_t sa = DW1000Ranging.getDistantDevice()->getShortAddress();
+  float d = DW1000Ranging.getDistantDevice()->getRange();
+  if (!validRange(d)) return;
+
+  int id = idFromShort(sa);
+  if (id < 0) return;
+
+  float d_corr = d - bias[id];
+  if (!validRange(d_corr)) return;
+
+  // ---------- Jump gate ----------
+  if (validRange(lastAccepted[id])) {
+    if (fabs(d_corr - lastAccepted[id]) > MAX_JUMP_M) {
+      aStat[id] = -2;
+      return;
+    }
+  }
+
+  aStat[id] = 0;
+  lastAccepted[id] = d_corr;
+
+  // ---------- Median ----------
+  buf[id][buf_i[id]] = d_corr;
+  buf_i[id] = (buf_i[id] + 1) % MED_N;
+  if (buf_fill[id] < MED_N) buf_fill[id]++;
+
+  float med = (buf_fill[id] >= 3) ? medianN(buf[id], buf_fill[id]) : d_corr;
+
+  // ---------- EMA on range ----------
+  fA[id] = emaUpdateRange(fA[id], med);
+  tA[id] = millis();
+
+  // Calibration collect
+  if (cal_active && validRange(fA[id])) {
+    cal_sum[id] += fA[id];
+    cal_cnt[id] += 1;
+  }
+}
+
+void newDevice(DW1000Device *device) {
+  uint16_t sa = device->getShortAddress();
+  int id = idFromShort(sa);
+  Serial.printf("[TAG1] Connected anchor SA=0x%04X -> id=%d\n", sa, id);
+}
+
+void inactiveDevice(DW1000Device *device) {
+  uint16_t sa = device->getShortAddress();
+  int id = idFromShort(sa);
+  Serial.printf("[TAG1] Anchor inactive SA=0x%04X -> id=%d\n", sa, id);
+}
+
+// =================== SERIAL CMD ===================
+void handleSerial() {
+  if (!Serial.available()) return;
+  String line = Serial.readStringUntil('\n');
+  line.trim();
+  if (line.length() == 0) return;
+
+  if (line.startsWith("CALP")) {
+    float x, y;
+    if (sscanf(line.c_str(), "CALP %f %f", &x, &y) == 2) {
+      cal_ref_x = x;
+      cal_ref_y = y;
+      cal_active = true;
+      cal_multi_point = true;
+      cal_start_ms = millis();
+      cal_state = 1; // >>> UPDATE STATE
+      for (int i = 0; i < 4; i++) { cal_sum[i] = 0; cal_cnt[i] = 0; }
+      Serial.printf("[CALP] start ref=(%.2f,%.2f) %u ms\n", cal_ref_x, cal_ref_y, (unsigned)CAL_MS);
+      Serial.println("[CALP] ทำหลายจุด แล้วพิมพ์ SAVE");
+    } else Serial.println("[CALP] usage: CALP x y");
+    return;
+  }
+
+  if (line.startsWith("CAL")) {
+    float x, y;
+    if (sscanf(line.c_str(), "CAL %f %f", &x, &y) == 2) {
+      cal_ref_x = x;
+      cal_ref_y = y;
+      cal_active = true;
+      cal_multi_point = false;
+      cal_start_ms = millis();
+      cal_state = 1; // >>> UPDATE STATE
+      for (int i = 0; i < 4; i++) { cal_sum[i] = 0; cal_cnt[i] = 0; }
+      Serial.printf("[CAL] start ref=(%.2f,%.2f) %u ms\n", cal_ref_x, cal_ref_y, (unsigned)CAL_MS);
+    } else Serial.println("[CAL] usage: CAL x y");
+    return;
+  }
+
+  if (line == "SAVE") {
+    for (int i = 0; i < 4; i++) {
+      if (mp_bias_cnt[i] > 0) bias[i] = (float)(mp_bias_sum[i] / (double)mp_bias_cnt[i]);
+    }
+    saveBias();
+    Serial.printf("[CAL] saved bias(m): b1=%.3f b2=%.3f b3=%.3f b4=%.3f\n", bias[0], bias[1], bias[2], bias[3]);
+    return;
+  }
+
+  if (line == "RESET") {
+    for (int i = 0; i < 4; i++) {
+      bias[i] = 0;
+      mp_bias_sum[i] = 0;
+      mp_bias_cnt[i] = 0;
+      lastAccepted[i] = -1;
+      fA[i] = -1;
+      buf_fill[i] = 0;
+      buf_i[i] = 0;
+    }
+    saveBias();
+    cal_state = 4; // >>> UPDATE STATE (Reset Done)
+    Serial.println("[CAL] reset bias=0 and saved.");
+    return;
+  }
+
+  if (line == "SHOW") {
+    Serial.printf("[CAL] bias(m): b1=%.3f b2=%.3f b3=%.3f b4=%.3f\n", bias[0], bias[1], bias[2], bias[3]);
+    Serial.printf("[CALP] mp_cnt: c1=%d c2=%d c3=%d c4=%d\n", mp_bias_cnt[0], mp_bias_cnt[1], mp_bias_cnt[2], mp_bias_cnt[3]);
+    return;
+  }
+
+  Serial.println("[CMD] CAL x y | CALP x y | SAVE | RESET | SHOW");
+}
+
+// =================== SETUP UWB ===================
+void setupUWB() {
+  SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
+  DW1000Ranging.initCommunication(PIN_RST, PIN_SS, PIN_IRQ);
+  DW1000Ranging.attachNewRange(newRange);
+  DW1000Ranging.attachNewDevice(newDevice);
+  DW1000Ranging.attachInactiveDevice(inactiveDevice);
+
+  char tag_addr[] = "7D:00:22:EA:82:60:3B:9C";
+  DW1000Ranging.startAsTag(tag_addr, DW1000.MODE_LONGDATA_RANGE_LOWPOWER, false);
+
+  loadBias();
+
+  Serial.println("=== TAG1 ready (with Web Dashboard) ===");
+  Serial.printf("Field: %.2fx%.2f m\n", FIELD_W, FIELD_H);
+  Serial.printf("Anchors: A1(%.2f,%.2f) A2(%.2f,%.2f) A3(%.2f,%.2f) A4(%.2f,%.2f)\n",
+                AX[0], AY[0], AX[1], AY[1], AX[2], AY[2], AX[3], AY[3]);
+  Serial.printf("HeightCorr: %s | TAG_Z=%.2f | AZ=[%.2f,%.2f,%.2f,%.2f]\n",
+                USE_2D_HEIGHT_CORR ? "ON" : "OFF", TAG_Z, AZ[0], AZ[1], AZ[2], AZ[3]);
+  Serial.printf("bias(m): b1=%.3f b2=%.3f b3=%.3f b4=%.3f\n", bias[0], bias[1], bias[2], bias[3]);
+  Serial.printf("timeout: %u ms\n", (unsigned)ANCHOR_TIMEOUT_MS);
+}
+
+// =================== LOOP UWB ===================
+void loopUWB() {
+  DW1000Ranging.loop();
+  handleSerial();
+
+  // Calibration window end
+  if (cal_active && (millis() - cal_start_ms > CAL_MS)) {
+    cal_active = false;
+
+    // 1. คำนวณระยะอ้างอิง 3 มิติ (3D Ref Distance)
+    float ex[4];
+    for (int i = 0; i < 4; i++) {
+      float dx = cal_ref_x - AX[i];
+      float dy = cal_ref_y - AY[i];
+      float dz = TAG_Z - AZ[i]; 
+      ex[i] = sqrtf(dx*dx + dy*dy + dz*dz); 
+    }
+
+    // 2. คำนวณ Bias ใหม่
+    float newBias[4] = { bias[0], bias[1], bias[2], bias[3] };
     
-    // UI Update for Tag 2 (40cm offset)
-    const t2_ui_x = j.x + OFFSET_X;
-const t2_ui_y = j.y;
-document.getElementById('t2_pos').textContent =
-  j.ok ? `${t2_ui_x.toFixed(2)}, ${t2_ui_y.toFixed(2)}` : "OFFLINE";
+    Serial.println("--- Calibration Report ---");
+    for (int i = 0; i < 4; i++) {
+      // Print จำนวน Sample ที่เก็บได้ (เพื่อ Debug)
+      Serial.printf("[CAL] Anchor %d: collected %d samples... ", i+1, cal_cnt[i]);
+      
+      if (cal_cnt[i] > 5) { 
+        float avg = (float)(cal_sum[i] / (double)cal_cnt[i]); 
+        newBias[i] = avg - ex[i];
+        Serial.printf("OK! New Bias = %.3f\n", newBias[i]);
+      } else {
+        Serial.println("FAIL! (Not enough data)");
+      }
+    }
+    Serial.println("--------------------------");
 
-    
-    document.getElementById('rmse').textContent = j.rmse.toFixed(3);
-    document.getElementById('status-badge').className = j.ok ? "badge bg-ok" : "badge bg-bad";
-    document.getElementById('status-badge').textContent = j.ok ? "ONLINE" : "SEARCHING";
-    if(j.a) j.a.forEach((v,i)=>document.getElementById('a'+(i+1)).textContent=v+" m");
-    const ms=document.getElementById('cal-msg');
-    ms.textContent=["READY","CALIBRATING...","SUCCESS!","FAILED","RESET DONE"][j.cs]||"READY";
-    ms.style.color=["#aaa","#eab308","#10b981","#ef4444","#3b82f6"][j.cs]||"#aaa";
-    drawMap(j);
-  } catch(e){}
-  setTimeout(tick, 200);
+    if (!cal_multi_point) {
+      for (int i = 0; i < 4; i++) bias[i] = newBias[i];
+      Serial.printf("[CAL] done ref=(%.2f,%.2f)\n", cal_ref_x, cal_ref_y);
+      Serial.println("[CAL] type SAVE or open /save (web) to store.");
+    } else {
+      for (int i = 0; i < 4; i++) {
+        // สะสมค่า Bias เข้าตัวแปร Multi-point (ถ้า Fail จะเป็นค่าเดิม)
+        mp_bias_sum[i] += newBias[i];
+        mp_bias_cnt[i] += 1;
+      }
+      Serial.printf("[CALP] point stored ref=(%.2f,%.2f)\n", cal_ref_x, cal_ref_y);
+      Serial.println("[CALP] next point -> /calp?x=..&y=.. , finish -> /save");
+    }
+
+    // >>> UPDATE STATE: 2 = Success / Finished
+    cal_state = 2; 
+    Serial.println("[CAL] Finished. State -> 2");
+  }
+
+  // Anchor timeout
+  uint32_t now = millis();
+  for (int i = 0; i < 4; i++) {
+    if (validRange(fA[i]) && (now - tA[i] > ANCHOR_TIMEOUT_MS)) {
+      fA[i] = -1;
+      aStat[i] = -1;
+    }
+  }
+
+  // Build Meas
+  Meas m[4];
+  int n = 0;
+
+  for (int i = 0; i < 4; i++) {
+    if (!validRange(fA[i])) continue;
+
+    float r3 = fA[i]; 
+
+    // Guard: min
+    if (r3 < MIN_RANGE_M) r3 = MIN_RANGE_M;
+
+    float r2;
+    if (!flattenRange2D(i, r3, r2)) continue; 
+
+    // Guard: min
+    if (r2 < MIN_RANGE_M) r2 = MIN_RANGE_M;
+
+    m[n].ax = AX[i];
+    m[n].ay = AY[i];
+    m[n].r  = r2;
+    m[n].id = i;
+    n++;
+  }
+
+  // Solve
+  float x_raw = -1, y_raw = -1, rmse = 999;
+  bool okSolve = false;
+
+  float x0 = have_xy ? x_f : FIELD_W * 0.5f;
+  float y0 = have_xy ? y_f : FIELD_H * 0.5f;
+
+  if (n >= 3) {
+    okSolve = solveXY_GN(m, n, x_raw, y_raw, rmse, x0, y0);
+
+    // Outlier removal
+    if (okSolve && n == 4 && rmse > RMSE_GATE_M) {
+      int wi = worstResidualIndex(m, n, x_raw, y_raw);
+      if (wi >= 0) {
+        Meas m2[3];
+        int k = 0;
+        for (int i = 0; i < n; i++) if (i != wi) m2[k++] = m[i];
+
+        float x2, y2, rmse2;
+        bool ok2 = solveXY_GN(m2, 3, x2, y2, rmse2, x_raw, y_raw);
+        if (ok2 && rmse2 < rmse) { x_raw = x2; y_raw = y2; rmse = rmse2; }
+      }
+    }
+  }
+
+  // RMSE gate
+  const bool okBasic = (n >= 3) && okSolve;
+  const bool acceptStrong = okBasic && (rmse <= RMSE_GATE_M);
+  const bool acceptWeak   = okBasic && (rmse <= RMSE_HARD_M);
+
+  last_accept = acceptWeak;
+  last_n      = n;
+  last_rmse   = okBasic ? rmse : -1;
+
+  if (acceptWeak) {
+    // (1) deadbandc
+    const float DEAD_XY = 0.02f;
+    if (have_xy) {
+      if (fabs(x_raw - x_f) < DEAD_XY) x_raw = x_f;
+      if (fabs(y_raw - y_f) < DEAD_XY) y_raw = y_f;
+    }
+
+    // (2) max step
+    if (have_xy) {
+      float dx = x_raw - x_f;
+      float dy = y_raw - y_f;
+      float step = hypot2(dx, dy);
+      if (step > MAX_STEP_M) {
+        float s = MAX_STEP_M / step;
+        x_raw = x_f + dx * s;
+        y_raw = y_f + dy * s;
+      }
+    }
+
+    // (3) adaptive smoothing
+    float alpha = computePosAlpha(n, rmse);
+    if (!acceptStrong) alpha = clampf(alpha * 0.55f, XY_ALPHA_MIN, XY_ALPHA_BASE);
+
+    if (!have_xy) {
+      x_f = x_raw;
+      y_f = y_raw;
+      have_xy = true;
+    } else {
+      x_f = x_f + alpha * (x_raw - x_f);
+      y_f = y_f + alpha * (y_raw - y_f);
+    }
+  }
+
+  // Print
+  static uint32_t lastPrint = 0;
+  if (millis() - lastPrint >= PRINT_MS) {
+    lastPrint = millis();
+
+    Serial.printf("[TAG1] n=%d  A1=%s  A2=%s  A3=%s  A4=%s | x=%.2f  y=%.2f | rmse=%.3f | st=%d | open=http://%s/\n",
+                  n,
+                  anchorString(0).c_str(), anchorString(1).c_str(), anchorString(2).c_str(), anchorString(3).c_str(),
+                  have_xy ? x_f : -1.0f, have_xy ? y_f : -1.0f,
+                  last_rmse,
+                  cal_state, // >>> Print state
+                  activeIP().toString().c_str());
+  }
 }
-tick();
-</script>
-</body>
-</html>
-)HTML";
-
-// =================== IMPLEMENTATION ===================
-IPAddress activeIP() {
-  if (WiFi.status() == WL_CONNECTED) return WiFi.localIP();
-  return WiFi.softAPIP();
-}
-
-static void handleIndex() { 
-  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-  server.send_P(200, "text/html", INDEX_HTML); 
-}
-
-static void handleInfo() { server.send(200, "text/plain", "UWB System Online"); }
-
-static void handleJson() {
-  String json = "{";
-  json += "\"x\":" + String(have_xy ? x_f : -1.0f, 3) + ",";
-  json += "\"y\":" + String(have_xy ? y_f : -1.0f, 3) + ",";
-  json += "\"rmse\":" + String(last_rmse, 4) + ",";
-  json += "\"n\":" + String(last_n) + ",";
-  json += "\"ok\":" + String(last_accept ? 1 : 0) + ",";
-  
-  bool t2_online = (millis() - t2_last_ms < 3000); 
-  json += "\"t2\":{\"ok\":" + String(t2_online ? 1 : 0) + ",\"x\":" + String(t2_x, 2) + ",\"y\":" + String(t2_y, 2) + "},";
-
-  json += "\"cs\":" + String(cal_state) + ","; 
-  json += "\"a\":[\"" + anchorString(0) + "\",\"" + anchorString(1) + "\",\"" + anchorString(2) + "\",\"" + anchorString(3) + "\"],";
-  json += "\"field\":{\"w\":" + String(FIELD_W, 2) + ",\"h\":" + String(FIELD_H, 2) + "},";
-  
-  // แก้ไขพิกัดให้ตรงตามตำแหน่งติดตั้งจริง (A1-A4)
-  // [0]=A1(0,0), [1]=A2(0,2), [2]=A3(3,2), [3]=A4(3,0)
-  json += "\"anch_xy\":[[0.0,0.0],[0.0,2.0],[3.0,0.0],[3.0,2.0]]";
-  
-  json += "}";
-  server.send(200, "application/json", json);
-}
-
-static void calStart(bool multi, float x, float y) {
-  cal_ref_x = x; cal_ref_y = y; cal_active = true; cal_multi_point = multi;
-  cal_start_ms = millis();
-  cal_state = 1; 
-  for (int i = 0; i < 4; i++) { cal_sum[i] = 0; cal_cnt[i] = 0; }
-}
-
-static void handleCalCommon(bool multi) {
-  if (!server.hasArg("x")) return;
-  float valX = server.arg("x").toFloat();
-  float valY = server.arg("y").toFloat();
-  calStart(multi, valX, valY);
-  server.send(200, "text/plain", "OK");
-}
-
-static void handleSave() {
-  for (int i = 0; i < 4; i++) if (mp_bias_cnt[i] > 0) bias[i] = mp_bias_sum[i] / mp_bias_cnt[i];
-  saveBias(); 
-  server.send(200, "text/plain", "Saved");
-}
-
-static void handleReset() {
-  for (int i = 0; i < 4; i++) { bias[i] = 0; mp_bias_sum[i] = 0; mp_bias_cnt[i] = 0; fA[i] = -1; lastAccepted[i] = -1; }
-  saveBias(); 
-  cal_state = 4;
-  server.send(200, "text/plain", "Reset");
-}
-
-void setupWeb() {
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.softAPConfig(AP_IP, AP_GW, AP_SN);
-  WiFi.softAP(AP_SSID, AP_PASS);
-  WiFi.begin(STA_SSID, STA_PASS);
-  
-  server.on("/", handleIndex);
-  server.on("/json", handleJson);
-  server.on("/info", handleInfo);
-  server.on("/cal", []() { handleCalCommon(false); });
-  server.on("/calp", []() { handleCalCommon(true); });
-  server.on("/save", handleSave);
-  server.on("/reset", handleReset);
-  server.begin();
-}
-
-void loopWeb() { server.handleClient(); }
