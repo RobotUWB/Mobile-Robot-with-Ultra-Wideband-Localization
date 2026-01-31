@@ -206,8 +206,8 @@ const SPACE_MODE = "PAUSE";
 /* ================== APP COMPONENT ================== */
 export default function App() {
   // ===== Calibration UI =====
-  const [refX, setRefX] = useState("1.00");
-  const [refY, setRefY] = useState("1.50");
+  const [refX, setRefX] = useState("");
+  const [refY, setRefY] = useState("");
   const [calState, setCalState] = useState(0); // 0..4 from ESP32 json.cs
 
   const CAL_TEXT = ["READY", "CALIBRATING...", "SUCCESS!", "FAILED", "RESET DONE"];
@@ -958,15 +958,18 @@ export default function App() {
                   {/* Row 1: REF inputs */}
                   <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                     <span style={{ fontSize: 12, color: "var(--muted)", fontWeight: 800 }}>REF</span>
-
                     <input
                       className="cal-in"
+                      type="number"
+                      step="0.01"
                       value={refX}
                       onChange={(e) => setRefX(e.target.value)}
                       inputMode="decimal"
-                      placeholder="1.00"
+                      placeholder="เช่น 1.00"
                       title="REF X (meter)"
+                      onFocus={(e) => e.target.select()}
                     />
+
                     <input
                       className="cal-in"
                       value={refY}
