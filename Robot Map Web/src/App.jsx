@@ -919,7 +919,11 @@ export default function App() {
             <Divider />
             <Metric label="COORD Y" value={(pose.y_mm / 1000).toFixed(2)} unit="m" />
             <Divider />
-            <Metric label="RMSE" value={rmse == null ? "--" : rmse.toFixed(3)} unit="" />
+            <Metric
+              label="RMSE"
+              value={rmse == null ? "--" : `${(rmse * 100).toFixed(1)} cm (${rmse.toFixed(3)} m)`}
+              unit=""
+            />
           </div>
         </header>
 
@@ -976,21 +980,21 @@ export default function App() {
                   {/* Row 2: Buttons (SAVE next to CAL) */}
                   <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                     <button
-                      onClick={saveT1}
-                      disabled={!connected}
-                      className="btn btnSuccess"
-                      style={{ height: 34, padding: "0 12px", borderRadius: 10 }}
-                    >
-                      SAVE
-                    </button>
-
-                    <button
                       onClick={calT1}
                       disabled={!connected}
                       className="btn btnPrimary"
                       style={{ height: 34, padding: "0 12px", borderRadius: 10 }}
                     >
                       CAL
+                    </button>
+
+                    <button
+                      onClick={saveT1}
+                      disabled={!connected}
+                      className="btn btnSuccess"
+                      style={{ height: 34, padding: "0 12px", borderRadius: 10 }}
+                    >
+                      SAVE
                     </button>
 
                     <button
@@ -1002,6 +1006,7 @@ export default function App() {
                       RESET
                     </button>
                   </div>
+
                 </div>
                 <div style={{ marginTop: 10, fontSize: 12, color: "var(--muted)", lineHeight: 1.35 }}>
                 </div>
