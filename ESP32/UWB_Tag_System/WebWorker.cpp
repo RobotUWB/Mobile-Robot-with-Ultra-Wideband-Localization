@@ -3,7 +3,8 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <esp_now.h> 
-
+// บรรทัดที่ประมาณ 6 ใน UwbWorker.cpp
+static bool is_busy_saving = false;
 // =================== WIFI CONFIG ===================
 static const char *AP_SSID = "UWB_TAG1_ESP32";
 static const char *AP_PASS = "12345678";
@@ -93,7 +94,6 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
     <div id="map-wrapper"><canvas id="cvs"></canvas></div>
     <div class="stats-row">
       <div class="stat-item"><div class="stat-label">Tag 1 (Front)</div><div class="stat-val"><span id="t1_pos">-</span></div></div>
-      <div class="stat-item"><div class="stat-label">Tag 2 (Back)</div><div class="stat-val" style="color:var(--cyan)"><span id="t2_pos">-</span></div></div>
       <div class="stat-item"><div class="stat-label">RMSE</div><div class="stat-val" style="color:var(--green)"><span id="rmse">-</span></div></div>
     </div>
   </div>
@@ -195,36 +195,20 @@ function drawMap(j) {
     });
   }
 
- // DRAW LOGIC: แสดงผล Tag1 (จุดจริง) และ Tag2 (จุดเลื่อนไป 40cm)
+ // DRAW LOGIC: แสดงผลเฉพาะ Tag 1 เท่านั้น
 if(j.ok || j.x > -0.5) {
-  // 1. กำหนดพิกัดหลักจากบอร์ด (Tag1 คือจุดจริงที่วาง Calibrate)
-  const t1_logic_x = j.x; 
-  const t1_logic_y = j.y;
+  // 1. กำหนดพิกัดหลักจากบอร์ด (Tag 1) และทำการ Clamp ให้อยู่ในขอบเขตสนาม
+  const t1_logic_x = Math.max(0, Math.min(j.x, FIELD_W)); 
+  const t1_logic_y = Math.max(0, Math.min(j.y, FIELD_H));
 
-  // 2. กำหนดพิกัด Tag2 ให้ห่างจาก Tag1 ออกไป 40 cm (0.40 เมตร)
-  // ตัวอย่างนี้ให้ห่างในแนวแกน X (ถ้าต้องการแกน Y ให้ไปบวกที่ t1_logic_y แทน)
-  const t2_logic_x = j.x + 0.40; 
-  const t2_logic_y = j.y;
-
-  // อัปเดตตัวเลขพิกัดบน Dashboard ให้ตรงกับในแผนที่
+  // อัปเดตตัวเลขพิกัดบน Dashboard เฉพาะ Tag 1
   document.getElementById('t1_pos').textContent = j.ok ? `${t1_logic_x.toFixed(2)}, ${t1_logic_y.toFixed(2)}` : "OFFLINE";
-  document.getElementById('t2_pos').textContent = j.ok ? `${t2_logic_x.toFixed(2)}, ${t2_logic_y.toFixed(2)}` : "OFFLINE";
 
-  // 3. แปลงพิกัดเมตรเป็นพิกเซลบนจอ
+  // 2. แปลงพิกัดเมตรเป็นพิกเซลบนจอ
   const t1x = tx(t1_logic_x), t1y = ty(t1_logic_y);
-  const t2x = tx(t2_logic_x), t2y = ty(t2_logic_y);
 
-  // 4. วาดเส้นเชื่อมระหว่าง Tag1 และ Tag2 (Visual Support)
-  ctx.beginPath();
-  ctx.moveTo(t1x, t1y);
-  ctx.lineTo(t2x, t2y);
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = 'rgba(0, 210, 255, 0.4)';
-  ctx.stroke();
-
-  // 5. วาดรูปสามเหลี่ยมแสดงตำแหน่ง Tag ทั้งสองจุด
-  drawTriangle(t1x, t1y, 10, '#3b82f6', 'Tag1 (Front)', 'left');
-  drawTriangle(t2x, t2y, 10, '#00d2ff', 'Tag2 (Back)', 'left');
+  // 3. วาดรูปสามเหลี่ยมแสดงตำแหน่ง Tag 1 จุดเดียว
+  drawTriangle(t1x, t1y, 10, '#3b82f6', 'Tag 1', 'left');
 }
 }
 
@@ -232,17 +216,17 @@ async function tick(){
   try {
     const r = await fetch('/json'); const j = await r.json();
     const t1_ui_x = j.x - OFFSET_X;
-const t1_ui_y = j.y;
-document.getElementById('t1_pos').textContent =
-  j.ok ? `${t1_ui_x.toFixed(2)}, ${t1_ui_y.toFixed(2)}` : "OFFLINE";
+    const t1_ui_y = j.y;
+    document.getElementById('t1_pos').textContent =
+      j.ok ? `${t1_ui_x.toFixed(2)}, ${t1_ui_y.toFixed(2)}` : "OFFLINE";
 
-const t2_ui_x = j.x;
-const t2_ui_y = j.y;
-document.getElementById('t2_pos').textContent =
-  j.ok ? `${t2_ui_x.toFixed(2)}, ${t2_ui_y.toFixed(2)}` : "OFFLINE";
+    // --- ส่วนที่แก้ไข: การแสดงผล RMSE ---
+    const errorM = j.rmse; 
+    const errorCm = errorM * 100;
+    // แสดงผลเป็น "XX.X cm (X.XXX m)"
+    document.getElementById('rmse').textContent = `${errorCm.toFixed(1)} cm (${errorM.toFixed(3)} m)`;
+    // ---------------------------------
 
-    
-    document.getElementById('rmse').textContent = j.rmse.toFixed(3);
     document.getElementById('status-badge').className = j.ok ? "badge bg-ok" : "badge bg-bad";
     document.getElementById('status-badge').textContent = j.ok ? "ONLINE" : "SEARCHING";
     if(j.a) j.a.forEach((v,i)=>document.getElementById('a'+(i+1)).textContent=v+" m");
@@ -287,8 +271,8 @@ static void handleJson() {
   json += "\"a\":[\"" + anchorString(0) + "\",\"" + anchorString(1) + "\",\"" + anchorString(2) + "\",\"" + anchorString(3) + "\"],";
   json += "\"field\":{\"w\":" + String(FIELD_W, 2) + ",\"h\":" + String(FIELD_H, 2) + "},";
   
-  // แก้ไขพิกัดให้ตรงตามตำแหน่งติดตั้งจริง (A1-A4)
-  // [0]=A1(0,0), [1]=A2(0,2), [2]=A3(3,2), [3]=A4(3,0)
+  // แก้ไขบรรทัดนี้ให้ลำดับ [x,y] ตรงกับ A1, A2, A3, A4
+  // A1(0,0), A2(0,2), A3(3,0), A4(3,2)
   json += "\"anch_xy\":[[0.0,0.0],[0.0,2.0],[3.0,0.0],[3.0,2.0]]";
   
   json += "}";
