@@ -12,11 +12,7 @@ const Icons = {
       <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
     </svg>
   ),
-  Refresh: () => (
-    <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-    </svg>
-  ),
+
   Wifi: () => (
     <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
       <path d="M5 12.55a11 11 0 0114.08 0M1.64 9a15 15 0 0120.72 0M8.27 16a6 6 0 017.46 0M12 20h.01" />
@@ -178,7 +174,7 @@ const GlobalStyles = () => (
 );
 
 /* ================== CONFIG ================== */
-const ESP32_IP = "192.168.88.69"; // (ตอนนี้ใช้ proxy แล้ว เลยไม่ต้องใช้ตรง ๆ)
+const ESP32_IP = "192.168.88.53"; // (ตอนนี้ใช้ proxy แล้ว เลยไม่ต้องใช้ตรง ๆ)
 const API_URL = "/api/json";
 const CMD_URL = "/api/cmd";
 
@@ -189,8 +185,6 @@ const ZOOM_MIN = 0.05,
   ZOOM_MAX = 0.4,
   ZOOM_STEP = 0.01;
 
-// ✅ แบบเพื่อน: Tag2 = Tag1 + 0.40m (fallback ถ้า ESP ยังไม่ส่ง t2)
-const TAG2_OFFSET_M = 0.4;
 /* ================== MANUAL DRIVE (TEST) ================== */
 // ✅ เปลี่ยน cmd ให้ตรงกับ ESP32/STM32 ของคุณได้เลย
 // ตัวอย่างถ้าคุณอยากส่งเป็น "W","A","S","D" ก็แก้ value เป็น "W" etc.
@@ -234,14 +228,6 @@ export default function App() {
 
   // Tag1
   const [pose, setPose] = useState({ x_mm: 0, y_mm: 0 });
-
-  // Tag2
-  const [pose2, setPose2] = useState({ x_mm: 0, y_mm: 0, ok: false });
-  const pose2Ref = useRef(pose2);
-  useEffect(() => {
-    pose2Ref.current = pose2;
-  }, [pose2]);
-
   // RMSE (ถ้ามีใน json)
   const [rmse, setRmse] = useState(null);
 
@@ -249,8 +235,6 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [showTags, setShowTags] = useState(true);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [toast, setToast] = useState({ show: false, msg: "", type: "info" });
 
   /* --- Refs for Animation Loop --- */
@@ -297,17 +281,6 @@ export default function App() {
       return false;
     }
   };
-
-  const handleRefresh = () => {
-    setIsRefreshing(true);
-    setConnected(false);
-    setTimeout(() => {
-      setRefreshKey((k) => k + 1);
-      setIsRefreshing(false);
-      showToast("Reconnecting...", "info");
-    }, 650);
-  };
-
   // ===== Calibration Actions (GET endpoints like friend's ESP32) =====
   const calT1 = async () => {
     const x = parseFloat(refX);
@@ -563,43 +536,19 @@ export default function App() {
         const tag1Ok = Number.isFinite(xVal) && Number.isFinite(yVal) && xVal !== -1 && yVal !== -1;
 
         if (tag1Ok) setPose(applyCal(xVal, yVal));
-
-        // 2) Tag2 Update
-        let t2_ok = false;
-        let t2x_m = 0;
-        let t2y_m = 0;
-
-        if (j.t2 && Number(j.t2.ok) === 1) {
-          const x2 = Number(j.t2.x);
-          const y2 = Number(j.t2.y);
-          if (Number.isFinite(x2) && Number.isFinite(y2)) {
-            t2_ok = true;
-            t2x_m = x2;
-            t2y_m = y2;
-          }
-        } else if (tag1Ok) {
-          // fallback แบบโค้ดเพื่อน
-          t2_ok = true;
-          t2x_m = xVal + TAG2_OFFSET_M;
-          t2y_m = yVal;
-        }
-
-        if (t2_ok) {
-          const p2 = applyCal(t2x_m, t2y_m);
-          setPose2({ x_mm: p2.x_mm, y_mm: p2.y_mm, ok: true });
-        } else {
-          setPose2((prev) => (prev.ok ? { ...prev, ok: false } : prev));
-        }
-
         // 3) Ranges Update
         if (j.a && Array.isArray(j.a)) {
-          setRanges({
+          const newRanges = {
             A1: parseFloat(j.a[0]) || 0,
             A2: parseFloat(j.a[1]) || 0,
             A3: parseFloat(j.a[2]) || 0,
             A4: parseFloat(j.a[3]) || 0,
-          });
+          };
+
+          rangesRef.current = newRanges;  // ✅ อัปเดต ref ให้ canvas ใช้ทันที
+          setRanges(newRanges);           // ✅ set แค่ครั้งเดียวพอ
         }
+
 
         // 4) Anchor XY Update
         if (j.anch_xy && Array.isArray(j.anch_xy)) {
@@ -625,7 +574,7 @@ export default function App() {
 
     const intervalId = setInterval(fetchData, 100);
     return () => clearInterval(intervalId);
-  }, [refreshKey]);
+  }, []);
 
   /* --- Canvas Drawing (ลด glow/ความ neon ให้ดูคนทำ) --- */
   useEffect(() => {
@@ -641,7 +590,7 @@ export default function App() {
       anchorOn: "#16a34a",
       anchorOff: "#64748b",
       tag1: "#3b82f6",
-      tag2: "#22d3ee",
+
       labelBg: "rgba(17,26,43,0.92)",
       labelBd: "rgba(255,255,255,0.10)",
       text: "#e5e7eb",
@@ -828,39 +777,16 @@ export default function App() {
         }
       }
 
-      // Tag1 + Tag2
+      // Tag1 (Only)
       const t1 = poseRef.current;
-      const t2 = pose2Ref.current;
 
       const t1Finite = Number.isFinite(t1.x_mm) && Number.isFinite(t1.y_mm);
       if (t1Finite) {
         const p1 = toPx(t1.x_mm, t1.y_mm, cx, cy, s, bounds);
 
-        if (t2 && t2.ok && Number.isFinite(t2.x_mm) && Number.isFinite(t2.y_mm)) {
-          const p2 = toPx(t2.x_mm, t2.y_mm, cx, cy, s, bounds);
-
-          // line between tags
-          ctx.beginPath();
-          ctx.moveTo(p1.px, p1.py);
-          ctx.lineTo(p2.px, p2.py);
-          ctx.lineWidth = 2;
-          ctx.strokeStyle = "rgba(34,211,238,0.35)";
-          ctx.setLineDash([6, 6]);
-          ctx.stroke();
-          ctx.setLineDash([]);
-
-          drawTriangle(p1.px, p1.py, 10, COLORS.tag1, "left");
-          drawTriangle(p2.px, p2.py, 10, COLORS.tag2, "left");
-
-
-          if (show) {
-            drawTagLabel("Tag1 (Front)", p1.px, p1.py, true);
-            drawTagLabel("Tag2 (Back)", p2.px, p2.py, false);
-          }
-        } else {
-          drawTriangle(p1.px, p1.py, 10, COLORS.tag1, "left");
-          if (show) drawTagLabel("Tag1 (Front)", p1.px, p1.py, true);
-        }
+        // draw Tag1
+        drawTriangle(p1.px, p1.py, 10, COLORS.tag1, "left");
+        if (show) drawTagLabel("Tag1 (Front)", p1.px, p1.py, true);
 
         // XY label (Tag1)
         if (show) {
@@ -884,6 +810,7 @@ export default function App() {
           ctx.restore();
         }
       }
+
 
       raf = requestAnimationFrame(draw);
     };
@@ -1188,13 +1115,11 @@ export default function App() {
           <div className="panel" style={{ padding: 0, position: "relative", overflow: "hidden", display: "flex", flexDirection: "column" }}>
             {/* Map Toolbar */}
             <div style={{ position: "absolute", top: 12, right: 12, display: "flex", gap: 8, zIndex: 10 }}>
-              <button onClick={handleRefresh} className="btn btnGhost btnIcon" title="Reconnect">
-                <div className={isRefreshing ? "spin" : ""}>
-                  <Icons.Refresh />
-                </div>
-              </button>
-
-              <button onClick={() => setShowTags(!showTags)} className="btn btnGhost" style={{ height: 36, padding: "0 12px", borderRadius: 10, fontSize: 12 }}>
+              <button
+                onClick={() => setShowTags(!showTags)}
+                className="btn btnGhost"
+                style={{ height: 36, padding: "0 12px", borderRadius: 10, fontSize: 12 }}
+              >
                 {showTags ? "Hide tags" : "Show tags"}
               </button>
             </div>
