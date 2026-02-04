@@ -1158,7 +1158,7 @@ export default function App() {
                 <input type="range" min={ZOOM_MIN} max={ZOOM_MAX} step={ZOOM_STEP} value={scale} onChange={(e) => setScale(parseFloat(e.target.value))} />
 
                 <button className="btn btnGhost" style={{ height: 30, width: 34, borderRadius: 10 }} onClick={() => setScale((s) => Math.min(ZOOM_MAX, s + ZOOM_STEP))}>
-                  +
+                  +iiii
                 </button>
               </div>
             </div>
