@@ -138,6 +138,16 @@ const GlobalStyles = () => (
       border-color: rgba(59,130,246,0.55);
       box-shadow: 0 0 0 3px rgba(59,130,246,0.14);
     }
+/* ✅ HIDE number arrows (spinner) */
+input.cal-in[type=number]::-webkit-outer-spin-button,
+input.cal-in[type=number]::-webkit-inner-spin-button{
+  -webkit-appearance: none;
+  margin: 0;
+}
+input.cal-in[type=number]{
+  -moz-appearance: textfield; /* Firefox */
+  appearance: textfield;
+}
 
     /* slider */
     input[type=range]{
@@ -172,11 +182,24 @@ const GlobalStyles = () => (
     ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); }
   `}</style>
 );
-
 /* ================== CONFIG ================== */
-const ESP32_IP = "192.168.88.53"; // (ตอนนี้ใช้ proxy แล้ว เลยไม่ต้องใช้ตรง ๆ)
-const API_URL = "/api/json";
-const CMD_URL = "/api/cmd";
+// IP ตัวที่ "มีตำแหน่ง" (ต้องเปิดแล้วเจอ /json ได้)
+/* ================== CONFIG ================== */
+// IP ตัวที่ "มีตำแหน่ง" (192.168.88.53) -> Proxy: /pos
+const POS_BASE = "/pos";
+
+// IP ตัวที่ "รับคำสั่งคุมหุ่น" (192.168.88.115) -> Proxy: /robot
+const CMD_BASE = "/robot";
+
+// ดึงตำแหน่ง
+const API_URL = `${POS_BASE}/json`;
+
+// ส่งคำสั่งคุมหุ่น
+const CMD_URL = `${CMD_BASE}/cmd`;
+
+// /cal /save /reset อยู่ฝั่ง POS (UWB) เป็นหลัก
+const api = (path) => `${POS_BASE}${path}`;
+
 
 const FIELD_W = 3000;
 const FIELD_H = 2000;
@@ -191,7 +214,7 @@ const ZOOM_MIN = 0.05,
 const DRIVE_CMDS = {
   W: "FWD",
   A: "LEFT",
-  S: "BACK",
+  S: "BWD",
   D: "RIGHT",
 };
 
@@ -201,7 +224,7 @@ const DRIVE_STOP_CMD = "STOP";
 // Spacebar behavior:
 // - "STOP"  = กดค้างส่ง STOP (ปล่อยแล้วถ้ายังค้าง WASD จะกลับไปส่งเดินต่อ)
 // - "PAUSE" = กดค้างส่ง PAUSE / ปล่อยส่ง RESUME (แนะนำถ้า STOP เป็น Emergency จริง)
-const SPACE_MODE = "PAUSE";
+const SPACE_MODE = "STOP";
 
 /* ================== APP COMPONENT ================== */
 export default function App() {
@@ -237,10 +260,17 @@ export default function App() {
   const [showTags, setShowTags] = useState(true);
   const [toast, setToast] = useState({ show: false, msg: "", type: "info" });
 
+  /* --- State: Database & Recording --- */
+  const [dbPositions, setDbPositions] = useState([]); // ✅ เก็บข้อมูลจาก Database
+  const [isAutoRecording, setIsAutoRecording] = useState(false); // ✅ สถานะ Auto Record
+
   /* --- Refs for Animation Loop --- */
+  const lastSaveRef = useRef(0); // ✅ สำหรับ Auto Record logic
   const scaleRef = useRef(scale);
   const poseRef = useRef(pose);
   const anchorsRef = useRef(anchors);
+  const isFetchingRef = useRef(false);
+  const missedHeartbeatsRef = useRef(0); // ✅ Heartbeat Counter
   const showTagsRef = useRef(showTags);
   const rangesRef = useRef(ranges);
 
@@ -267,20 +297,25 @@ export default function App() {
   };
 
   /* --- API Actions --- */
-  const sendCmd = async (payload) => {
+  const sendCmd = async ({ cmd }) => {
     try {
-      await fetch(CMD_URL, {
+      const res = await fetch(CMD_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ cmd }),   // ✅ ESP32 ต้องการ {cmd:"FWD"} แบบนี้
+        cache: "no-store",
       });
-      return true;
+
+      const txt = await res.text().catch(() => "");
+      if (!res.ok) console.error("CMD Error", res.status, txt);
+      return res.ok;
     } catch (e) {
-      console.error(e);
-      showToast("Command Failed: Check Connection", "error");
+      console.error("CMD fetch failed:", e);
       return false;
     }
   };
+
+
   // ===== Calibration Actions (GET endpoints like friend's ESP32) =====
   const calT1 = async () => {
     const x = parseFloat(refX);
@@ -291,7 +326,7 @@ export default function App() {
     }
 
     try {
-      const url = `/api/cal?x=${encodeURIComponent(x)}&y=${encodeURIComponent(y)}`;
+      const url = api(`/cal?x=${encodeURIComponent(x)}&y=${encodeURIComponent(y)}`);
       const r = await fetch(url);
       if (!r.ok) throw new Error("CAL failed");
       showToast("CAL T1 started", "success");
@@ -301,9 +336,10 @@ export default function App() {
     }
   };
 
+
   const saveT1 = async () => {
     try {
-      const r = await fetch("/api/save");
+      const r = await fetch(api("/save"));
       if (!r.ok) throw new Error("SAVE failed");
       showToast("SAVE T1 OK", "success");
     } catch (e) {
@@ -314,7 +350,7 @@ export default function App() {
 
   const resetT1 = async () => {
     try {
-      const r = await fetch("/api/reset");
+      const r = await fetch(api("/reset"));
       if (!r.ok) throw new Error("RESET failed");
       showToast("RESET T1 OK", "success");
     } catch (e) {
@@ -322,6 +358,7 @@ export default function App() {
       showToast("RESET T1 failed (check /reset endpoint)", "error");
     }
   };
+
   /* ================== MANUAL DRIVE LOGIC ================== */
   const [driveKey, setDriveKey] = useState(null); // "W"/"A"/"S"/"D"/null
   const pressedOrderRef = useRef([]); // เก็บลำดับปุ่มที่ค้าง (อันล่าสุดมี priority)
@@ -356,7 +393,7 @@ export default function App() {
   };
 
   const applyManualDrive = async () => {
-    if (!connectedRef2.current) return;
+    // if (!connectedRef2.current) return; // ✅ Allow drive even if 'Disconnected' (Pos)
 
     // ถ้ากำลังกด Space อยู่ -> ให้หยุด override ไว้ก่อน
     if (spaceHeldRef.current) return;
@@ -368,9 +405,9 @@ export default function App() {
     setDriveKey(k);
 
     if (k) {
-      await sendCmd({ cmd: DRIVE_CMDS[k] });
+      sendCmd({ cmd: DRIVE_CMDS[k] }); // 🔥 No await (fire and forget)
     } else {
-      await sendCmd({ cmd: DRIVE_STOP_CMD });
+      sendCmd({ cmd: DRIVE_STOP_CMD });
     }
   };
 
@@ -395,96 +432,80 @@ export default function App() {
     pressedOrderRef.current = [];
     setDriveKey(null);
 
-    if (!connectedRef2.current) return;
+    // if (!connectedRef2.current) return; // ✅ Allow safe stop on blur
 
     // ปลอดภัย: หลุดโฟกัสแล้วสั่งหยุด
     if (!spaceHeldRef.current) {
       await sendCmd({ cmd: DRIVE_STOP_CMD });
     }
   };
-
   const spaceDown = async () => {
-    if (!connectedRef2.current) return;
+    // if (!connectedRef2.current) return;
     if (spaceHeldRef.current) return;
 
     spaceHeldRef.current = true;
 
-    if (SPACE_MODE === "PAUSE") {
-      wasPausedBeforeSpaceRef.current = isPausedRef2.current;
-
-      // กดค้าง -> PAUSE
-      isPausedRef2.current = true;
-      setIsPaused(true);
-      await sendCmd({ cmd: "PAUSE" });
-    } else {
-      // STOP mode
-      await sendCmd({ cmd: DRIVE_STOP_CMD });
-    }
+    // HOLD = STOP ครั้งเดียว
+    await sendCmd({ cmd: "STOP" });
   };
 
   const spaceUp = async () => {
-    if (!connectedRef2.current) return;
+    // if (!connectedRef2.current) return;
     if (!spaceHeldRef.current) return;
 
     spaceHeldRef.current = false;
 
-    if (SPACE_MODE === "PAUSE") {
-      // ปล่อย -> RESUME เฉพาะถ้าเดิมไม่ได้ Pause อยู่ก่อนกด Space
-      if (!wasPausedBeforeSpaceRef.current) {
-        isPausedRef2.current = false;
-        setIsPaused(false);
-        await sendCmd({ cmd: "RESUME" });
-      }
-    }
-
-    // ถ้ายังค้าง WASD อยู่ -> กลับไปเดินต่อ
+    // ปล่อยแล้ว ถ้ายังค้าง WASD -> เดินต่อ
     await applyManualDrive();
   };
 
-  // ✅ Keyboard listeners: WASD + Spacebar
+  // ✅ Keyboard listeners: WASD + Spacebar (ใช้ e.code รองรับคีย์บอร์ดไทย/eng)
   useEffect(() => {
+    const codeToMoveKey = (code) => {
+      if (code === "KeyW") return "W";
+      if (code === "KeyA") return "A";
+      if (code === "KeyS") return "S";
+      if (code === "KeyD") return "D";
+      return null;
+    };
+
     const onKeyDown = (e) => {
       if (isTypingTarget(e.target)) return;
 
-      const k = e.key.toLowerCase();
-
       // Spacebar
-      if (k === " " || e.code === "Space") {
+      if (e.code === "Space") {
         e.preventDefault();
         spaceDown();
         return;
       }
 
-      if (["w", "a", "s", "d"].includes(k)) {
+      const k = codeToMoveKey(e.code);
+      if (k) {
         if (e.repeat) return;
         e.preventDefault();
-        manualPress(k);
+        manualPress(k); // ส่ง "W"/"A"/"S"/"D"
       }
     };
 
     const onKeyUp = (e) => {
       if (isTypingTarget(e.target)) return;
 
-      const k = e.key.toLowerCase();
-
-      if (k === " " || e.code === "Space") {
+      if (e.code === "Space") {
         e.preventDefault();
         spaceUp();
         return;
       }
 
-      if (["w", "a", "s", "d"].includes(k)) {
+      const k = codeToMoveKey(e.code);
+      if (k) {
         e.preventDefault();
         manualRelease(k);
       }
     };
 
     const onBlur = () => {
-      // หลุดหน้าต่าง/สลับแท็บ -> หยุดทันที
       manualReleaseAll();
-      if (spaceHeldRef.current) {
-        spaceHeldRef.current = false;
-      }
+      spaceHeldRef.current = false;
     };
 
     window.addEventListener("keydown", onKeyDown, { passive: false });
@@ -499,44 +520,52 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* --- Polling Data Loop --- */
+  /* --- Polling Data Loop (แก้ไขแล้ว) --- */
   useEffect(() => {
-    const fetchData = async () => {
+    // เพิ่มจาก 5 เป็น 25 (ยอมให้ Network หลุดได้นานขึ้น ก่อนบอกว่า Disconnected)
+    const MAX_MISSED = 25;
+
+    const fetchDataWithHeartbeat = async () => {
+      if (isFetchingRef.current) return;
+      isFetchingRef.current = true;
+
       try {
-        const res = await fetch(API_URL);
+        const fetchWithTimeout = (url, ms = 3000) =>
+          Promise.race([
+            fetch(url),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), ms))
+          ]);
+
+        const res = await fetchWithTimeout(API_URL);
+
         if (!res.ok) throw new Error("Network error");
         const j = await res.json();
 
+        // ✅ เชื่อมต่อสำเร็จ -> รีเซ็ต counter เป็น 0 และ set Connected
+        missedHeartbeatsRef.current = 0;
         setConnected(true);
 
-        // ==========================================
-        // 🛠️ Calibration (ใช้กับ Tag1/Tag2 เหมือนกัน)
-        // ==========================================
+        // ... Logic เดิม ...
         const SWAP_XY = false;
         const INVERT_X = false;
         const INVERT_Y = false;
 
         const applyCal = (x_m, y_m) => {
-          let rawX = x_m * 1000; // m -> mm
+          let rawX = x_m * 1000;
           let rawY = y_m * 1000;
-
           let finalX = SWAP_XY ? rawY : rawX;
           let finalY = SWAP_XY ? rawX : rawY;
-
           if (INVERT_X) finalX = FIELD_W - finalX;
           if (INVERT_Y) finalY = FIELD_H - finalY;
-
           return { x_mm: finalX, y_mm: finalY };
         };
 
-        // 1) Tag1 Update (จาก j.x, j.y)
         const xVal = Number(j.x);
         const yVal = Number(j.y);
-
         const tag1Ok = Number.isFinite(xVal) && Number.isFinite(yVal) && xVal !== -1 && yVal !== -1;
 
         if (tag1Ok) setPose(applyCal(xVal, yVal));
-        // 3) Ranges Update
+
         if (j.a && Array.isArray(j.a)) {
           const newRanges = {
             A1: parseFloat(j.a[0]) || 0,
@@ -544,13 +573,10 @@ export default function App() {
             A3: parseFloat(j.a[2]) || 0,
             A4: parseFloat(j.a[3]) || 0,
           };
-
-          rangesRef.current = newRanges;  // ✅ อัปเดต ref ให้ canvas ใช้ทันที
-          setRanges(newRanges);           // ✅ set แค่ครั้งเดียวพอ
+          rangesRef.current = newRanges;
+          setRanges(newRanges);
         }
 
-
-        // 4) Anchor XY Update
         if (j.anch_xy && Array.isArray(j.anch_xy)) {
           const newAnchors = j.anch_xy.map((p, i) => ({
             id: `A${i + 1}`,
@@ -560,21 +586,64 @@ export default function App() {
           if (newAnchors.length >= 3) setAnchors(newAnchors);
         }
 
-        // 5) RMSE (optional)
         const r = Number(j.rmse);
         if (Number.isFinite(r)) setRmse(r);
 
-        // ✅ 6) Calibration state (optional) 0..4
         const cs = Number(j.cs);
         if (Number.isFinite(cs)) setCalState(Math.max(0, Math.min(4, cs)));
+
       } catch (err) {
-        setConnected(false);
+        // ❌ พลาด 1 ครั้ง -> เพิ่ม counter
+        missedHeartbeatsRef.current += 1;
+
+        // ถ้าพลาดเกินกำหนด ถึงจะยอมแพ้และขึ้น Disconnected
+        if (missedHeartbeatsRef.current >= MAX_MISSED) {
+          console.warn("Lost connection (max retries reached):", err);
+          setConnected(false);
+        } else {
+          // console.log(`Skipped packet (${missedHeartbeatsRef.current}/${MAX_MISSED})`);
+        }
+      } finally {
+        isFetchingRef.current = false;
       }
     };
 
-    const intervalId = setInterval(fetchData, 100);
-    return () => clearInterval(intervalId);
+    // ✅ ปรับเป็น 200ms เพื่อความเสถียร
+    const intervalId = setInterval(fetchDataWithHeartbeat, 200);
+
+    return () => {
+      clearInterval(intervalId);
+    };
   }, []);
+
+  // ✅ แยก Auto Record Interval ออกมา
+  useEffect(() => {
+    const autoSaveInterval = setInterval(() => {
+      if (!isAutoRecording) return;
+
+      const now = Date.now();
+      if (now - lastSaveRef.current < 1000) return; // บันทึกทุก 1 วิ
+
+      const currentPose = poseRef.current;
+      if (currentPose.x_mm !== 0 || currentPose.y_mm !== 0) {
+        const payload = {
+          x: Number((currentPose.x_mm / 1000).toFixed(2)),
+          y: Number((currentPose.y_mm / 1000).toFixed(2)),
+          name: "AUTO"
+        };
+
+        fetch("http://localhost:8000/positions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        }).then(() => {
+          lastSaveRef.current = now;
+        }).catch(e => console.error("Auto save failed", e));
+      }
+    }, 1000);
+
+    return () => clearInterval(autoSaveInterval);
+  }, [isAutoRecording]);
 
   /* --- Canvas Drawing (ลด glow/ความ neon ให้ดูคนทำ) --- */
   useEffect(() => {
@@ -890,7 +959,7 @@ export default function App() {
                 justifyContent: "center",
                 color: "var(--muted)",
               }}
-              title={`ESP32: ${ESP32_IP}`}
+              title="ESP32: Dual Setup (Pos=.53, Cmd=.115)"
             >
               <Icons.Wifi />
             </div>
@@ -934,14 +1003,19 @@ export default function App() {
             {/* Anchors + Calibration */}
             <div className="panel" style={{ padding: 16 }}>
               <div className="panelTitle">Anchor distances</div>
-
               <div style={{ display: "grid", gap: 10 }}>
                 {Object.entries(ranges).map(([k, v]) => (
                   <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ color: "var(--text)", fontSize: 14, fontWeight: 700 }}>{k}</span>
-                    <span className="mono" style={{ fontSize: 13, color: "var(--muted)" }}>
+
+                    {/* ✅ แก้จุดที่ 1: ชื่อ A1, A2... ให้เป็นสีขาวสว่างสุด (#ffffff) */}
+                    <span style={{ color: "#ffffff", fontSize: 14, fontWeight: 700 }}>{k}</span>
+
+                    {/* ✅ แก้จุดที่ 2: ตัวเลขระยะทาง ให้สว่างขึ้น (เปลี่ยนจาก var(--muted) เป็น #ffffff หรือ var(--text)) */}
+                    {/* ถ้าอยากได้ขาวจั๊วะให้ใช้ "#ffffff" ถ้าอยากได้ขาวนวลๆ ให้ใช้ "var(--text)" */}
+                    <span className="mono" style={{ fontSize: 13, color: "#ffffff" }}>
                       {v.toFixed(2)}m
                     </span>
+
                   </div>
                 ))}
               </div>
@@ -958,6 +1032,7 @@ export default function App() {
                   {/* Row 1: REF inputs */}
                   <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                     <span style={{ fontSize: 12, color: "var(--muted)", fontWeight: 800 }}>REF</span>
+
                     <input
                       className="cal-in"
                       type="number"
@@ -965,18 +1040,17 @@ export default function App() {
                       value={refX}
                       onChange={(e) => setRefX(e.target.value)}
                       inputMode="decimal"
-                      placeholder="เช่น 1.00"
-                      title="REF X (meter)"
                       onFocus={(e) => e.target.select()}
                     />
 
                     <input
                       className="cal-in"
+                      type="number"
+                      step="0.01"
                       value={refY}
                       onChange={(e) => setRefY(e.target.value)}
                       inputMode="decimal"
-                      placeholder="1.50"
-                      title="REF Y (meter)"
+                      onFocus={(e) => e.target.select()}
                     />
                   </div>
 
@@ -1072,15 +1146,19 @@ export default function App() {
             {/* Controls */}
             <div style={{ marginTop: "auto", display: "grid", gap: 10 }}>
               <button
-                onClick={() => {
+                onClick={async () => {
                   if (isPaused) {
-                    sendCmd({ cmd: "RESUME" });
+                    // RESUME: แค่ปลดล็อคให้สั่งเดินได้ (ไม่ต้องยิงคำสั่งไป ESP32)
                     setIsPaused(false);
+                    showToast("RESUME (unlocked)", "success");
                   } else {
-                    sendCmd({ cmd: "PAUSE" });
+                    // PAUSE: สั่งหยุดจริง
+                    await sendCmd({ cmd: "STOP" });
                     setIsPaused(true);
+                    showToast("STOP (paused)", "success");
                   }
                 }}
+
                 className="btn"
                 style={{
                   width: "100%",
@@ -1158,7 +1236,7 @@ export default function App() {
                 <input type="range" min={ZOOM_MIN} max={ZOOM_MAX} step={ZOOM_STEP} value={scale} onChange={(e) => setScale(parseFloat(e.target.value))} />
 
                 <button className="btn btnGhost" style={{ height: 30, width: 34, borderRadius: 10 }} onClick={() => setScale((s) => Math.min(ZOOM_MAX, s + ZOOM_STEP))}>
-                  +iiii
+                  +
                 </button>
               </div>
             </div>

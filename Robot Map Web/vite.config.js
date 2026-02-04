@@ -5,10 +5,15 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      "/api": {
+      "/pos": {
         target: "http://192.168.88.53",
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ""),
+        rewrite: (path) => path.replace(/^\/pos/, ""),
+      },
+      "/robot": {
+        target: "http://192.168.88.115",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/robot/, ""),
       },
     },
   },
