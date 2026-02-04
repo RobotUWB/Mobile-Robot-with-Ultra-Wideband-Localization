@@ -5,7 +5,6 @@
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
 
-
 #include "Settings.h"
 #include "WebPage.h"
 
@@ -14,13 +13,15 @@ HardwareSerial STM32Serial(2);
 WebServer server(80);
 unsigned long previousMillis = 0;
 
-
+// --- Helper Functions ---
 
 void initWiFi() {
   WiFi.mode(WIFI_STA);
+  // Config Static IP
   if (!WiFi.config(local_IP, gateway, subnet, primaryDNS)) {
     Serial.println("STA Failed to configure");
   }
+  
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   
   Serial.print("Connecting to WiFi");
@@ -39,7 +40,7 @@ void initOTA() {
 void sendToSTM32(String cmd) {
   if(cmd != "") {
     STM32Serial.println(cmd);
-    Serial.println("STM32 << " + cmd);
+    Serial.println("STM32 << " + cmd); // ดูใน Serial Monitor ว่าออกไหม
     server.send(200, "text/plain", "STM32: " + cmd);
   } else {
     server.send(400, "text/plain", "Bad Request");
@@ -50,7 +51,6 @@ void handleAction() {
   String dir = server.arg("go");
   String cmd = "";
 
-  // Logic การแปลงปุ่มเป็น Command
   if      (dir == "F") cmd = "V,300,0";
   else if (dir == "B") cmd = "V,-300,0";
   else if (dir == "L") cmd = "V,250,150";
@@ -76,12 +76,13 @@ void checkWiFi() {
 
 void setup() {
   Serial.begin(115200);
-  STM32Serial.begin(115200, SERIAL_8N1, TX_PIN, RX_PIN); // ใช้ค่าจาก Settings.h
+  
+  // *** จุดที่แก้: ต้องเรียงเป็น (Baud, Config, RX, TX) ***
+  STM32Serial.begin(115200, SERIAL_8N1, RX_PIN, TX_PIN); 
 
   initWiFi();
   initOTA();
 
-  // Web Server Routes
   server.on("/", []() { server.send(200, "text/html; charset=utf-8", index_html); });
   server.on("/action", handleAction);
   server.begin();
