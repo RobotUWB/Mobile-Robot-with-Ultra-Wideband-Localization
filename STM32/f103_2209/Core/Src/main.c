@@ -76,6 +76,9 @@ uint32_t last_imu_time = 0;
 int16_t raw_gyro_z = 0;
 float gyro_z_dps = 0;
 float gyro_z_offset = 0;
+
+float robot_heading = 0.0f;   // มุมสะสม (Heading)
+uint32_t prev_imu_time = 0;   // เวลาล่าสุดที่คำนวณ (ใช้ micros)
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -288,6 +291,24 @@ void ICM_Calibrate(void) {
 	sprintf(log, "Done! Offset: %.2f\n", gyro_z_offset);
 	HAL_UART_Transmit(&huart2, (uint8_t*) log, strlen(log), 100);
 }
+void Update_Heading(void) {
+    // 1. อ่านค่า Gyro ปัจจุบัน (และลบ Offset ที่ Calibrate แล้ว)
+    ICM_ReadGyroZ();
+
+    // 2. คำนวณเวลาที่ผ่านไป (dt) เป็นวินาที
+    uint32_t now = micros();
+    float dt = (now - prev_imu_time) / 1000000.0f; // แปลง us เป็น s
+    prev_imu_time = now;
+
+    // 3. ป้องกันบั๊กเวลา dt กระโดด (เช่น รอบแรกสุด)
+    if (dt > 1.0f) dt = 0;
+
+    // 4. คำนวณมุมสะสม (Integration)
+    // ถ้า Gyro นิ่งจริง (น้อยกว่า 0.05 dps) ไม่ต้องบวก (Deadband) เพื่อตัด Noise
+    if (fabsf(gyro_z_dps) > 1.5f) {
+        robot_heading += gyro_z_dps * dt;
+    }
+}
 /* USER CODE END 0 */
 
 /**
@@ -350,13 +371,31 @@ int main(void) {
 			Parse_Command((char*) rx_buffer);
 		}
 
-		if (HAL_GetTick() - last_imu_time > 50) {
+		if (HAL_GetTick() - last_imu_time > 10) {
 			last_imu_time = HAL_GetTick();
-			ICM_ReadGyroZ();
 
-			char log[32];
-			sprintf(log, "GZ: %.2f\n", gyro_z_dps);
-			HAL_UART_Transmit(&huart2, (uint8_t*) log, strlen(log), 10);
+			Update_Heading(); // เรียกฟังก์ชันคำนวณมุม
+
+			//print
+			static uint8_t print_count = 0;
+			if (++print_count >= 10) {
+				print_count = 0;
+				char log[64];
+				// โชว์ทั้งความเร็ว (GZ) และมุมสะสม (ANG)
+				sprintf(log, "GZ: %.2f | ANG: %.2f\n", gyro_z_dps,
+						robot_heading);
+				HAL_UART_Transmit(&huart2, (uint8_t*) log, strlen(log), 10);
+			}
+		}
+
+		static uint32_t last_telemetry = 0;
+		if (HAL_GetTick() - last_telemetry > 200) {
+			last_telemetry = HAL_GetTick();
+
+			char tx_buf[32];
+			// ส่งรูปแบบ "A=มุม\n" (เช่น A=90.50)
+			sprintf(tx_buf, "A=%.2f\n", robot_heading);
+			HAL_UART_Transmit(&huart1, (uint8_t*) tx_buf, strlen(tx_buf), 10);
 		}
 		Run_Motors_Loop();
 		/* USER CODE END WHILE */

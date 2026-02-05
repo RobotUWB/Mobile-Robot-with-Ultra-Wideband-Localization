@@ -2,16 +2,16 @@
 #include <WebServer.h>
 #include <HardwareSerial.h>
 #include <ESPmDNS.h>
-
 #include <ArduinoOTA.h>
-#include <ArduinoJson.h> // ⚠️ ต้องลง Library "ArduinoJson" เพิ่มนะครับ (ถ้ายังไม่มี)
-
+#include <ArduinoJson.h> 
 #include "Settings.h"
-// #include "WebPage.h" <-- ลบทิ้งไปเลย เราไม่ใช้ HTML ในนี้แล้ว
 
 // --- Global Objects ---
 HardwareSerial STM32Serial(2);
 WebServer server(80);
+
+// 🔥 ตัวแปรเก็บมุมจาก STM32
+float currentAngle = 0.0;
 
 // --- Helper Functions ---
 void initWiFi() {
@@ -24,15 +24,29 @@ void initWiFi() {
   Serial.println("\nWiFi Connected: " + WiFi.localIP().toString());
 }
 
-// ⚠️ ฟังก์ชันสำคัญ: อนุญาตให้เพื่อนยิง API ข้ามเครื่องได้ (CORS)
 void enableCORS() {
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.sendHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
   server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
+// 🔥 ฟังก์ชันใหม่: ดักฟัง STM32
+void checkSTM32() {
+  while (STM32Serial.available()) {
+    String line = STM32Serial.readStringUntil('\n');
+    line.trim(); 
+    
+    // ถ้าเจอ "A=" ให้เก็บค่ามุม
+    if (line.startsWith("A=")) {
+      currentAngle = line.substring(2).toFloat();
+      Serial.print("Parsed Angle: "); 
+      Serial.println(currentAngle);
+      // Serial.println("Angle Updated: " + String(currentAngle)); // Debug
+    }
+  }
+}
+
 void sendToSTM32(String cmd) {
-  // Logic เดิม: แปลงคำสั่งเป็น Protocol STM32
   String serialCmd = "";
   if      (cmd == "FWD") serialCmd = "V,300,0";
   else if (cmd == "BWD") serialCmd = "V,-300,0";
@@ -47,17 +61,11 @@ void sendToSTM32(String cmd) {
 }
 
 void handleCommand() {
-  enableCORS(); // ใส่ Header อนุญาตทุกครั้งที่ตอบกลับ
-
-  if (server.method() == HTTP_OPTIONS) {
-    server.send(200, "text/plain", "OK");
-    return;
-  }
+  enableCORS();
+  if (server.method() == HTTP_OPTIONS) { server.send(200, "text/plain", "OK"); return; }
 
   if (server.hasArg("plain")) {
     String body = server.arg("plain");
-    Serial.println("Received JSON: " + body);
-
     String cmd = "";
     if (body.indexOf("FWD") >= 0) cmd = "FWD";
     else if (body.indexOf("BWD") >= 0) cmd = "BWD";
@@ -67,7 +75,6 @@ void handleCommand() {
 
     if (cmd != "") {
       sendToSTM32(cmd);
-      // *** แก้ตรงนี้แล้วครับ ***
       server.send(200, "application/json", "{\"status\":\"ok\", \"cmd\":\"" + cmd + "\"}");
     } else {
       server.send(400, "application/json", "{\"status\":\"error\", \"msg\":\"Unknown Command\"}");
@@ -82,19 +89,21 @@ void setup() {
   STM32Serial.begin(115200, SERIAL_8N1, RX_PIN, TX_PIN);
 
   initWiFi();
-  
   ArduinoOTA.setHostname("CyberBot-API");
   ArduinoOTA.begin();
 
-  // Route ใหม่: /cmd (รับ POST)
   server.on("/cmd", HTTP_POST, handleCommand);
-  
-  // รองรับกรณีเพื่อนยิงมาเช็คสิทธิ์ (OPTIONS)
   server.on("/cmd", HTTP_OPTIONS, handleCommand);
 
-  // Route หน้าแรก: บอกว่าฉันคือ API Server
+  // 🔥 API ใหม่: ดูค่ามุม (GET /status)
+  server.on("/status", HTTP_GET, []() {
+    enableCORS();
+    String json = "{\"status\":\"ok\", \"angle\":" + String(currentAngle) + "}";
+    server.send(200, "application/json", json);
+  });
+
   server.on("/", []() {
-    server.send(200, "text/plain", "CyberBot API Server Online. Use POST /cmd to control.");
+    server.send(200, "text/plain", "CyberBot API Online. GET /status to see angle.");
   });
 
   server.begin();
@@ -104,4 +113,7 @@ void setup() {
 void loop() {
   ArduinoOTA.handle();
   server.handleClient();
+  
+  // 🔥 เรียกอ่านค่าตลอดเวลา
+  checkSTM32();
 }
