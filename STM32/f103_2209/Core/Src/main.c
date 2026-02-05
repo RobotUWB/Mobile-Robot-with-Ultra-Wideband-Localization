@@ -6,14 +6,23 @@
  ******************************************************************************
  */
 /* USER CODE END Header */
-
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
+/* USER CODE END Includes */
 
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 // --- ⚙️ ROBOT CONFIG ---
 #define STEPS_PER_MM        10      // ค่าที่คุณจูนแล้ว
@@ -25,12 +34,20 @@
 #define RX_BUFFER_SIZE      64
 /* USER CODE END PD */
 
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
 /* Private variables ---------------------------------------------------------*/
+SPI_HandleTypeDef hspi2;
+
+TIM_HandleTypeDef htim2;
+
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart3;
 
-TIM_HandleTypeDef htim2;
 /* USER CODE BEGIN PV */
 uint8_t rx_buffer[RX_BUFFER_SIZE];
 uint8_t rx_byte;
@@ -56,9 +73,14 @@ static void MX_GPIO_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_TIM2_Init(void);
+static void MX_SPI2_Init(void);
+/* USER CODE BEGIN PFP */
 void Parse_Command(char *cmd);
 void TMC2209_Init(void);
+/* USER CODE END PFP */
 
+/* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
 void Force_UART3_GPIO_Init(void) {
@@ -155,22 +177,46 @@ void Run_Motors_Loop(void) {
 }
 /* USER CODE END 0 */
 
+/**
+ * @brief  The application entry point.
+ * @retval int
+ */
 int main(void) {
+
+	/* USER CODE BEGIN 1 */
+
+	/* USER CODE END 1 */
+
+	/* MCU Configuration--------------------------------------------------------*/
+
+	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
 	HAL_Init();
+
+	/* USER CODE BEGIN Init */
+
+	/* USER CODE END Init */
+
+	/* Configure the system clock */
 	SystemClock_Config();
+
+	/* USER CODE BEGIN SysInit */
+
+	/* USER CODE END SysInit */
+
+	/* Initialize all configured peripherals */
 	MX_GPIO_Init();
 	MX_USART1_UART_Init();
 	Force_UART3_GPIO_Init();
-	MX_USART3_UART_Init(); // TMC UART
-	MX_USART2_UART_Init(); // Debug
+	MX_USART3_UART_Init();
 
+	MX_USART2_UART_Init();
+	MX_TIM2_Init();
+	MX_SPI2_Init();
+	/* USER CODE BEGIN 2 */
 	DWT_Init(); // เริ่มตัวจับเวลาละเอียด
-
-	// --- Setup TMC2209 ---
 	HAL_Delay(1000);
 	TMC2209_Init();
 
-	// Enable Motors
 	HAL_GPIO_WritePin(GPIOA, EN_Pin, GPIO_PIN_RESET);
 
 	// Start Receiving
@@ -178,18 +224,21 @@ int main(void) {
 
 	char msg[] = "\nROS-STYLE READY\n";
 	HAL_UART_Transmit(&huart2, (uint8_t*) msg, strlen(msg), 100);
+	/* USER CODE END 2 */
 
 	/* Infinite loop */
+	/* USER CODE BEGIN WHILE */
 	while (1) {
-		// 1. ตรวจสอบคำสั่งใหม่ (ถ้ามี)
 		if (cmd_ready) {
 			cmd_ready = 0;
 			Parse_Command((char*) rx_buffer);
 		}
-
-		// 2. ขับเคลื่อนมอเตอร์ (ทำงานตลอดเวลา)
 		Run_Motors_Loop();
+		/* USER CODE END WHILE */
+
+		/* USER CODE BEGIN 3 */
 	}
+	/* USER CODE END 3 */
 }
 
 /**
@@ -226,6 +275,42 @@ void SystemClock_Config(void) {
 	if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK) {
 		Error_Handler();
 	}
+}
+
+/**
+ * @brief SPI2 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_SPI2_Init(void) {
+
+	/* USER CODE BEGIN SPI2_Init 0 */
+
+	/* USER CODE END SPI2_Init 0 */
+
+	/* USER CODE BEGIN SPI2_Init 1 */
+
+	/* USER CODE END SPI2_Init 1 */
+	/* SPI2 parameter configuration*/
+	hspi2.Instance = SPI2;
+	hspi2.Init.Mode = SPI_MODE_MASTER;
+	hspi2.Init.Direction = SPI_DIRECTION_2LINES;
+	hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
+	hspi2.Init.CLKPolarity = SPI_POLARITY_HIGH;
+	hspi2.Init.CLKPhase = SPI_PHASE_2EDGE;
+	hspi2.Init.NSS = SPI_NSS_SOFT;
+	hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8;
+	hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
+	hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
+	hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+	hspi2.Init.CRCPolynomial = 10;
+	if (HAL_SPI_Init(&hspi2) != HAL_OK) {
+		Error_Handler();
+	}
+	/* USER CODE BEGIN SPI2_Init 2 */
+
+	/* USER CODE END SPI2_Init 2 */
+
 }
 
 /**
@@ -383,6 +468,9 @@ static void MX_GPIO_Init(void) {
 	HAL_GPIO_WritePin(GPIOA,
 	EN_Pin | STEP_R_Pin | DIR_R_Pin | STEP_L_Pin | DIR_L_Pin, GPIO_PIN_RESET);
 
+	/*Configure GPIO pin Output Level */
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);
+
 	/*Configure GPIO pins : EN_Pin DIR_R_Pin DIR_L_Pin */
 	GPIO_InitStruct.Pin = EN_Pin | DIR_R_Pin | DIR_L_Pin;
 	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -396,6 +484,13 @@ static void MX_GPIO_Init(void) {
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
 	HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+	/*Configure GPIO pin : PB12 */
+	GPIO_InitStruct.Pin = GPIO_PIN_12;
+	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+	GPIO_InitStruct.Pull = GPIO_NOPULL;
+	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
 	/* USER CODE BEGIN MX_GPIO_Init_2 */
 
