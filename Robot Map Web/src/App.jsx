@@ -273,6 +273,7 @@ export default function App() {
   const missedHeartbeatsRef = useRef(0); // ✅ Heartbeat Counter
   const showTagsRef = useRef(showTags);
   const rangesRef = useRef(ranges);
+  const mouseRef = useRef({ x: 0, y: 0, active: false }); // ✅ Mouse tracking
 
   useEffect(() => {
     scaleRef.current = scale;
@@ -522,8 +523,8 @@ export default function App() {
 
   /* --- Polling Data Loop (แก้ไขแล้ว) --- */
   useEffect(() => {
-    // เพิ่มจาก 5 เป็น 25 (ยอมให้ Network หลุดได้นานขึ้น ก่อนบอกว่า Disconnected)
-    const MAX_MISSED = 25;
+    // เพิ่มเป็น 100 (20 วินาที) เพื่อให้ขึ้น Online ค้างไว้นานที่สุดเท่าที่จะทำได้
+    const MAX_MISSED = 100;
 
     const fetchDataWithHeartbeat = async () => {
       if (isFetchingRef.current) return;
@@ -880,6 +881,55 @@ export default function App() {
         }
       }
 
+      // ✅ Mouse Hover Tooltip
+      if (mouseRef.current.active) {
+        const mx = mouseRef.current.x;
+        const my = mouseRef.current.y;
+
+        // Inverse Calcs
+        const midX = (bounds.minX + bounds.maxX) / 2;
+        const midY = (bounds.minY + bounds.maxY) / 2;
+
+        const mmX = (mx - cx) / s + midX;
+        const mmY = midY - (my - cy) / s;
+
+        const txt = `X:${(mmX / 1000).toFixed(2)} Y:${(mmY / 1000).toFixed(2)}`;
+
+        ctx.save();
+        ctx.font = "600 12px Inter";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "bottom";
+
+        // Draw crosshair
+        ctx.strokeStyle = "rgba(255,255,255,0.3)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(mx, 0); ctx.lineTo(mx, H);
+        ctx.moveTo(0, my); ctx.lineTo(W, my);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Tooltip
+        const pad = 6;
+        const tw = ctx.measureText(txt).width + pad * 2;
+        const th = 20;
+        const tx = mx + 10;
+        const ty = my - 10;
+
+        ctx.fillStyle = "rgba(0,0,0,0.8)";
+        ctx.strokeStyle = "rgba(255,255,255,0.2)";
+        ctx.beginPath();
+        ctx.roundRect(tx, ty - th, tw, th, 4);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = "#fff";
+        ctx.fillText(txt, tx + pad, ty - pad + 2);
+
+        ctx.restore();
+      }
+
 
       raf = requestAnimationFrame(draw);
     };
@@ -1145,8 +1195,43 @@ export default function App() {
 
             {/* Controls */}
             <div style={{ marginTop: "auto", display: "grid", gap: 10 }}>
+              {/* ✅ Save DB (Auto Record) Button */}
+              <button
+                onClick={() => {
+                  const nextState = !isAutoRecording;
+                  setIsAutoRecording(nextState);
+                  if (nextState) {
+                    showToast("STARTED RECORDING DB", "success");
+                  } else {
+                    showToast("STOPPED RECORDING DB", "info");
+                  }
+                }}
+                className="btn"
+                style={{
+                  width: "100%",
+                  padding: 14,
+                  borderRadius: 12,
+                  background: isAutoRecording ? "rgba(234,179,8,0.20)" : "rgba(255,255,255,0.04)",
+                  borderColor: isAutoRecording ? "rgba(234,179,8,0.60)" : "var(--border)",
+                  color: isAutoRecording ? "#fbbf24" : "var(--text)",
+                }}
+              >
+                {isAutoRecording ? (
+                  <>
+                    <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#fbbf24", marginRight: 8, boxShadow: "0 0 8px #fbbf24" }} />
+                    RECORDING DB...
+                  </>
+                ) : (
+                  <>
+                    <div style={{ width: 10, height: 10, borderRadius: "50%", background: "var(--muted)", marginRight: 8 }} />
+                    REC DATABASE
+                  </>
+                )}
+              </button>
+
               <button
                 onClick={async () => {
+
                   if (isPaused) {
                     // RESUME: แค่ปลดล็อคให้สั่งเดินได้ (ไม่ต้องยิงคำสั่งไป ESP32)
                     setIsPaused(false);
@@ -1212,7 +1297,24 @@ export default function App() {
 
             {/* Canvas */}
             <div style={{ flex: 1, background: "var(--surface2)", position: "relative" }}>
-              <canvas ref={canvasRef} width={1200} height={700} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
+              <canvas
+                ref={canvasRef}
+                width={1200} height={700}
+                style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", touchAction: "none" }}
+                onPointerMove={(e) => {
+                  const rect = e.target.getBoundingClientRect();
+                  const scaleX = e.target.width / rect.width;
+                  const scaleY = e.target.height / rect.height;
+                  mouseRef.current = {
+                    x: (e.clientX - rect.left) * scaleX,
+                    y: (e.clientY - rect.top) * scaleY,
+                    active: true
+                  };
+                }}
+                onPointerLeave={() => {
+                  mouseRef.current.active = false;
+                }}
+              />
             </div>
 
             {/* Zoom Footer */}
