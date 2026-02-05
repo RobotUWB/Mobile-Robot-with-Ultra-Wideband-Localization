@@ -403,12 +403,23 @@ void loopUWB() {
       Serial.println("[CAL] type SAVE or open /save (web) to store.");
     } else {
       for (int i = 0; i < 4; i++) {
-        // สะสมค่า Bias เข้าตัวแปร Multi-point (ถ้า Fail จะเป็นค่าเดิม)
+        // สะสมค่า Bias เข้าตัวแปร Multi-point
         mp_bias_sum[i] += newBias[i];
         mp_bias_cnt[i] += 1;
       }
-      Serial.printf("[CALP] point stored ref=(%.2f,%.2f)\n", cal_ref_x, cal_ref_y);
-      Serial.println("[CALP] next point -> /calp?x=..&y=.. , finish -> /save");
+      
+      // ส่วนที่เพิ่มใหม่เพื่อให้ดู Log ง่ายขึ้น
+      int current_p = mp_bias_cnt[0]; // ใช้ Anchor แรกเป็นตัวนับจำนวนจุดที่บันทึกแล้ว
+      Serial.println("------------------------------------------");
+      Serial.printf("[CALP] จุดที่ %d บันทึกสำเร็จ! พิกัด: (%.2f, %.2f)\n", current_p, cal_ref_x, cal_ref_y);
+      
+      if (current_p >= 5) {
+        Serial.println(">>> [OK] บันทึกครบ 5 จุดตามที่ต้องการแล้ว! <<<");
+        Serial.println(">>> พิมพ์ 'SAVE' เพื่อคำนวณค่าเฉลี่ยและบันทึกลง Flash <<<");
+      } else {
+        Serial.printf(">>> บันทึกแล้ว %d/5 จุด (เหลืออีก %d จุดที่ต้องเก็บให้ครบ)\n", current_p, 5 - current_p);
+      }
+      Serial.println("------------------------------------------");
     }
 
     // >>> UPDATE STATE: 2 = Success / Finished
