@@ -6,7 +6,7 @@ export default defineConfig({
   server: {
     proxy: {
       "/pos": {
-        target: "http://192.168.88.53",
+        target: "http://192.168.88.99",
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/pos/, ""),
       },
