@@ -3,17 +3,29 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <esp_now.h> 
+
 // บรรทัดที่ประมาณ 6 ใน UwbWorker.cpp
 static bool is_busy_saving = false;
+
 // =================== WIFI CONFIG ===================
+// --- ส่วนของ AP Mode (ปล่อย WiFi เอง) ---
 static const char *AP_SSID = "UWB_TAG1_ESP32";
 static const char *AP_PASS = "12345678";
-static const IPAddress AP_IP(192, 168, 88, 1);
-static const IPAddress AP_GW(192, 168, 88, 1);
+
+// [FIX] แก้ IP ของ Hotspot ตัวเองให้เป็น 192.168.4.1 
+// เพื่อไม่ให้ชนกับ Router (192.168.88.1)
+static const IPAddress AP_IP(192, 168, 4, 1);
+static const IPAddress AP_GW(192, 168, 4, 1);
 static const IPAddress AP_SN(255, 255, 255, 0);
 
+// --- ส่วนของ STA Mode (เกาะ Router) ---
 static const char *STA_SSID = "GMR";
 static const char *STA_PASS = "12123121211212312121";
+
+// [ADDED] ส่วนที่เพิ่ม: กำหนด Fix IP ที่ต้องการตรงนี้
+static const IPAddress STA_FIX_IP(192, 168, 88, 99);   // IP ที่คุณต้องการ
+static const IPAddress STA_FIX_GW(192, 168, 88, 1);    // Gateway (IP ของ Router)
+static const IPAddress STA_FIX_SN(255, 255, 255, 0);   // Subnet Mask
 
 WebServer server(80);
 
@@ -309,8 +321,16 @@ static void handleReset() {
 
 void setupWeb() {
   WiFi.mode(WIFI_AP_STA);
+  // [FIXED] ใช้ AP_IP ตัวใหม่ (4.1) ที่ไม่ชนกับ Router
   WiFi.softAPConfig(AP_IP, AP_GW, AP_SN);
   WiFi.softAP(AP_SSID, AP_PASS);
+
+  // [ADDED] สั่ง Fix IP สำหรับขาที่เกาะ Router (STA)
+  // ต้องใส่บรรทัดนี้ *ก่อน* WiFi.begin
+  if (!WiFi.config(STA_FIX_IP, STA_FIX_GW, STA_FIX_SN)) {
+    Serial.println("[WIFI] STA Failed to configure Static IP!");
+  }
+
   WiFi.begin(STA_SSID, STA_PASS);
   
   server.on("/", handleIndex);

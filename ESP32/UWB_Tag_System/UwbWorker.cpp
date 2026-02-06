@@ -44,6 +44,7 @@ static inline float emaUpdateRange(float prev, float x) {
 }
 
 // 3D -> 2D flatten (horizontal distance) using known heights
+// [FIXED] แก้ไขฟังก์ชันนี้เพื่อไม่ให้ตัดสัญญาณเมื่ออยู่ใกล้มุมห้อง
 static inline bool flattenRange2D(int id, float r3, float &r2) {
   if (!validRange(r3)) return false;
   if (!USE_2D_HEIGHT_CORR) { r2 = r3; return true; }
@@ -52,13 +53,19 @@ static inline bool flattenRange2D(int id, float r3, float &r2) {
   const float r32 = r3 * r3;
   const float dz2 = dz * dz;
 
-  // guard: if r3 <= dz -> sqrt negative (tag almost under anchor height)
-  if (r32 <= dz2 + 1e-4f) return false;
+  // [แก้จุดที่ 1] ถ้าอยู่ใต้เสา (ค่าติดลบในทางคณิตศาสตร์) ให้ถือว่าระยะราบคือ 1cm
+  // ของเดิม: if (r32 <= dz2 + 1e-4f) return false;  <-- ตัวปัญหาทำมุมห้องดับ
+  if (r32 <= dz2) { 
+    r2 = 0.01f; 
+    return true; 
+  }
 
   r2 = sqrtf(r32 - dz2);
 
-  // guard: too close tends to multipath
-  if (r2 < 0.25f) return false;
+  // [แก้จุดที่ 2] ปิดการตัดระยะใกล้ (ให้รับค่าได้แม้จะชิดเสามากๆ)
+  // ของเดิม: if (r2 < 0.25f) return false; <-- ตัวปัญหาทำให้เดินชิดเสาแล้วค่าหาย
+  if (r2 < 0.01f) r2 = 0.01f; 
+
   return true;
 }
 
