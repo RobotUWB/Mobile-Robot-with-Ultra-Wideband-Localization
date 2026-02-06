@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 
 /* ================== ICONS ================== */
+const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
 const Icons = {
   Play: () => (
     <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -596,7 +598,23 @@ export default function App() {
         const yVal = Number(j.y);
         const tag1Ok = Number.isFinite(xVal) && Number.isFinite(yVal) && xVal !== -1 && yVal !== -1;
 
-        if (tag1Ok) setPose(applyCal(xVal, yVal));
+        if (tag1Ok) {
+          const p = applyCal(xVal, yVal);
+
+          // ใช้ตำแหน่ง anchor จริง
+          const xs = anchorsRef.current.map(a => a.x_mm);
+          const ys = anchorsRef.current.map(a => a.y_mm);
+
+          const minX = Math.min(...xs);
+          const maxX = Math.max(...xs);
+          const minY = Math.min(...ys);
+          const maxY = Math.max(...ys);
+
+          setPose({
+            x_mm: clamp(p.x_mm, minX, maxX),
+            y_mm: clamp(p.y_mm, minY, maxY),
+          });
+        }
 
         if (j.a && Array.isArray(j.a)) {
           const newRanges = {
