@@ -217,6 +217,10 @@ const DRIVE_CMDS = {
   S: "BWD",
   D: "RIGHT",
 };
+const ROT_CMDS = {
+  Q: "ROTL",
+  E: "ROTR",
+};
 
 // หยุดตอนปล่อยปุ่มเดิน (หรือไม่มีปุ่มค้าง)
 const DRIVE_STOP_CMD = "STOP";
@@ -260,12 +264,7 @@ export default function App() {
   const [showTags, setShowTags] = useState(true);
   const [toast, setToast] = useState({ show: false, msg: "", type: "info" });
 
-  /* --- State: Database & Recording --- */
-  const [dbPositions, setDbPositions] = useState([]); // ✅ เก็บข้อมูลจาก Database
-  const [isAutoRecording, setIsAutoRecording] = useState(false); // ✅ สถานะ Auto Record
-
   /* --- Refs for Animation Loop --- */
-  const lastSaveRef = useRef(0); // ✅ สำหรับ Auto Record logic
   const scaleRef = useRef(scale);
   const poseRef = useRef(pose);
   const anchorsRef = useRef(anchors);
@@ -362,9 +361,10 @@ export default function App() {
 
   /* ================== MANUAL DRIVE LOGIC ================== */
   const [driveKey, setDriveKey] = useState(null); // "W"/"A"/"S"/"D"/null
+  const [rotKey, setRotKey] = useState(null); // "Q" | "E" | null
   const pressedOrderRef = useRef([]); // เก็บลำดับปุ่มที่ค้าง (อันล่าสุดมี priority)
-  const spaceHeldRef = useRef(false);
-  const wasPausedBeforeSpaceRef = useRef(false);
+  const [stopHeld, setStopHeld] = useState(false);
+  const stopHeldRef = useRef(false);
 
   const connectedRef2 = useRef(connected);
   const isPausedRef2 = useRef(isPaused);
@@ -392,24 +392,35 @@ export default function App() {
     const arr = pressedOrderRef.current;
     return arr.length ? arr[arr.length - 1] : null;
   };
-
   const applyManualDrive = async () => {
-    // if (!connectedRef2.current) return; // ✅ Allow drive even if 'Disconnected' (Pos)
-
-    // ถ้ากำลังกด Space อยู่ -> ให้หยุด override ไว้ก่อน
-    if (spaceHeldRef.current) return;
-
     // ถ้าถูก Pause อยู่ (จาก UI) ไม่สั่งเดินซ้ำ
     if (isPausedRef2.current) return;
+
+    // ✅ ถ้ากำลังกด STOP ค้างอยู่ ให้สั่ง STOP ตลอด และไม่ล้างปุ่มที่ค้าง
+    if (stopHeldRef.current) {
+      sendCmd({ cmd: DRIVE_STOP_CMD });
+      return;
+    }
 
     const k = computeActiveMoveKey();
     setDriveKey(k);
 
     if (k) {
-      sendCmd({ cmd: DRIVE_CMDS[k] }); // 🔥 No await (fire and forget)
+      sendCmd({ cmd: DRIVE_CMDS[k] });
     } else {
       sendCmd({ cmd: DRIVE_STOP_CMD });
     }
+  };
+
+  const rotatePress = async (k) => {
+    if (isPausedRef2.current) return;
+    setRotKey(k);
+    await sendCmd({ cmd: ROT_CMDS[k] });
+  };
+
+  const rotateRelease = async () => {
+    setRotKey(null);
+    await sendCmd({ cmd: DRIVE_STOP_CMD }); // ปล่อยแล้วหยุดหมุน
   };
 
   const manualPress = async (kRaw) => {
@@ -428,39 +439,45 @@ export default function App() {
     pressedOrderRef.current = pressedOrderRef.current.filter((x) => x !== k);
     await applyManualDrive();
   };
-
   const manualReleaseAll = async () => {
     pressedOrderRef.current = [];
     setDriveKey(null);
 
-    // if (!connectedRef2.current) return; // ✅ Allow safe stop on blur
+    // ✅ เคลียร์ stop hold ด้วย
+    stopHeldRef.current = false;
+    setStopHeld(false);
 
-    // ปลอดภัย: หลุดโฟกัสแล้วสั่งหยุด
-    if (!spaceHeldRef.current) {
-      await sendCmd({ cmd: DRIVE_STOP_CMD });
-    }
-  };
-  const spaceDown = async () => {
-    // if (!connectedRef2.current) return;
-    if (spaceHeldRef.current) return;
-
-    spaceHeldRef.current = true;
-
-    // HOLD = STOP ครั้งเดียว
-    await sendCmd({ cmd: "STOP" });
+    await sendCmd({ cmd: DRIVE_STOP_CMD });
   };
 
-  const spaceUp = async () => {
-    // if (!connectedRef2.current) return;
-    if (!spaceHeldRef.current) return;
-
-    spaceHeldRef.current = false;
-
-    // ปล่อยแล้ว ถ้ายังค้าง WASD -> เดินต่อ
-    await applyManualDrive();
+  const stopHoldPress = () => {
+    // ✅ ไม่ล้าง pressedOrderRef เพื่อให้ปล่อย STOP แล้วกลับไปวิ่งต่อ
+    stopHeldRef.current = true;
+    setStopHeld(true);
+    sendCmd({ cmd: DRIVE_STOP_CMD });
   };
 
-  // ✅ Keyboard listeners: WASD + Spacebar (ใช้ e.code รองรับคีย์บอร์ดไทย/eng)
+  const stopHoldRelease = async () => {
+    stopHeldRef.current = false;
+    setStopHeld(false);
+    await applyManualDrive(); // ✅ ปล่อย STOP แล้วกลับไปตามปุ่มที่ค้างอยู่
+  };
+
+  const stopNow = async () => {
+    // หยุดแบบ “ตัดคำสั่งเดิน” ไม่ให้กลับไปวิ่งเอง
+    pressedOrderRef.current = [];
+    setDriveKey(null);
+
+    await sendCmd({ cmd: "STOP" }); // ✅ ส่ง {"cmd":"STOP"}
+    // จะโชว์ toast ก็ได้
+    // showToast("STOP", "success");
+  };
+  const codeToRotateKey = (code) => {
+    if (code === "KeyQ") return "Q";
+    if (code === "KeyE") return "E";
+    return null;
+  };
+
   useEffect(() => {
     const codeToMoveKey = (code) => {
       if (code === "KeyW") return "W";
@@ -473,10 +490,18 @@ export default function App() {
     const onKeyDown = (e) => {
       if (isTypingTarget(e.target)) return;
 
-      // Spacebar
       if (e.code === "Space") {
+        if (e.repeat) return;
         e.preventDefault();
-        spaceDown();
+        stopHoldPress();
+        return;
+      }
+
+      const r = codeToRotateKey(e.code);
+      if (r) {
+        if (e.repeat) return;
+        e.preventDefault();
+        rotatePress(r);
         return;
       }
 
@@ -484,7 +509,7 @@ export default function App() {
       if (k) {
         if (e.repeat) return;
         e.preventDefault();
-        manualPress(k); // ส่ง "W"/"A"/"S"/"D"
+        manualPress(k);
       }
     };
 
@@ -493,7 +518,14 @@ export default function App() {
 
       if (e.code === "Space") {
         e.preventDefault();
-        spaceUp();
+        stopHoldRelease();
+        return;
+      }
+
+      const r = codeToRotateKey(e.code);
+      if (r) {
+        e.preventDefault();
+        rotateRelease();
         return;
       }
 
@@ -506,7 +538,6 @@ export default function App() {
 
     const onBlur = () => {
       manualReleaseAll();
-      spaceHeldRef.current = false;
     };
 
     window.addEventListener("keydown", onKeyDown, { passive: false });
@@ -518,8 +549,8 @@ export default function App() {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
 
   /* --- Polling Data Loop (แก้ไขแล้ว) --- */
   useEffect(() => {
@@ -616,35 +647,6 @@ export default function App() {
       clearInterval(intervalId);
     };
   }, []);
-
-  // ✅ แยก Auto Record Interval ออกมา
-  useEffect(() => {
-    const autoSaveInterval = setInterval(() => {
-      if (!isAutoRecording) return;
-
-      const now = Date.now();
-      if (now - lastSaveRef.current < 1000) return; // บันทึกทุก 1 วิ
-
-      const currentPose = poseRef.current;
-      if (currentPose.x_mm !== 0 || currentPose.y_mm !== 0) {
-        const payload = {
-          x: Number((currentPose.x_mm / 1000).toFixed(2)),
-          y: Number((currentPose.y_mm / 1000).toFixed(2)),
-          name: "AUTO"
-        };
-
-        fetch("http://localhost:8000/positions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        }).then(() => {
-          lastSaveRef.current = now;
-        }).catch(e => console.error("Auto save failed", e));
-      }
-    }, 1000);
-
-    return () => clearInterval(autoSaveInterval);
-  }, [isAutoRecording]);
 
   /* --- Canvas Drawing (ลด glow/ความ neon ให้ดูคนทำ) --- */
   useEffect(() => {
@@ -1053,33 +1055,30 @@ export default function App() {
             {/* Anchors + Calibration */}
             <div className="panel" style={{ padding: 16 }}>
               <div className="panelTitle">Anchor distances</div>
+
               <div style={{ display: "grid", gap: 10 }}>
                 {Object.entries(ranges).map(([k, v]) => (
-                  <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-
-                    {/* ✅ แก้จุดที่ 1: ชื่อ A1, A2... ให้เป็นสีขาวสว่างสุด (#ffffff) */}
+                  <div
+                    key={k}
+                    style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
+                  >
                     <span style={{ color: "#ffffff", fontSize: 14, fontWeight: 700 }}>{k}</span>
-
-                    {/* ✅ แก้จุดที่ 2: ตัวเลขระยะทาง ให้สว่างขึ้น (เปลี่ยนจาก var(--muted) เป็น #ffffff หรือ var(--text)) */}
-                    {/* ถ้าอยากได้ขาวจั๊วะให้ใช้ "#ffffff" ถ้าอยากได้ขาวนวลๆ ให้ใช้ "var(--text)" */}
                     <span className="mono" style={{ fontSize: 13, color: "#ffffff" }}>
                       {v.toFixed(2)}m
                     </span>
-
                   </div>
                 ))}
               </div>
 
               <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                  <div className="panelTitle" style={{ margin: 0 }}>
-                    Tag1 calibration
+                  <div className="panelTitle" style={{ margin: 0 }}>Tag1 calibration</div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: CAL_COLOR[calState] || "var(--muted)" }}>
+                    {CAL_TEXT[calState] || "READY"}
                   </div>
-                  <div style={{ fontSize: 12, fontWeight: 800, color: CAL_COLOR[calState] || "var(--muted)" }}>{CAL_TEXT[calState] || "READY"}</div>
                 </div>
 
                 <div style={{ display: "grid", gap: 10 }}>
-                  {/* Row 1: REF inputs */}
                   <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                     <span style={{ fontSize: 12, color: "var(--muted)", fontWeight: 800 }}>REF</span>
 
@@ -1104,7 +1103,6 @@ export default function App() {
                     />
                   </div>
 
-                  {/* Row 2: Buttons (SAVE next to CAL) */}
                   <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                     <button
                       onClick={calT1}
@@ -1133,117 +1131,110 @@ export default function App() {
                       RESET
                     </button>
                   </div>
+                </div>
 
-                </div>
-                <div style={{ marginTop: 10, fontSize: 12, color: "var(--muted)", lineHeight: 1.35 }}>
-                </div>
+                <div style={{ marginTop: 10, fontSize: 12, color: "var(--muted)", lineHeight: 1.35 }} />
               </div>
             </div>
+
             {/* Manual Drive (TEST) */}
             <div className="panel" style={{ padding: 16 }}>
               <div className="panelTitle">Manual drive (test)</div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, maxWidth: 240 }}>
-                <div />
-                <KeyBtn
-                  label="W"
-                  active={driveKey === "W"}
-                  disabled={!connected || isPaused}
-                  onDown={() => manualPress("W")}
-                  onUp={() => manualRelease("W")}
-                />
-                <div />
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 60px)", gap: 8, justifyContent: "center" }}>
 
-                <KeyBtn
-                  label="A"
-                  active={driveKey === "A"}
-                  disabled={!connected || isPaused}
-                  onDown={() => manualPress("A")}
-                  onUp={() => manualRelease("A")}
-                />
-                <KeyBtn
-                  label="S"
-                  active={driveKey === "S"}
-                  disabled={!connected || isPaused}
-                  onDown={() => manualPress("S")}
-                  onUp={() => manualRelease("S")}
-                />
-                <KeyBtn
-                  label="D"
-                  active={driveKey === "D"}
-                  disabled={!connected || isPaused}
-                  onDown={() => manualPress("D")}
-                  onUp={() => manualRelease("D")}
-                />
+                {/* Q */}
+                <button
+                  className={`btn ${rotKey === "Q" ? "btnPrimary" : "btnNeutral"}`}
+                  onMouseDown={() => rotatePress("Q")}
+                  onMouseUp={rotateRelease}
+                  onMouseLeave={rotateRelease}
+                >
+                  Q
+                </button>
+
+                {/* W */}
+                <button
+                  className={`btn ${driveKey === "W" ? "btnPrimary" : "btnNeutral"}`}
+                  onMouseDown={() => manualPress("W")}
+                  onMouseUp={() => manualRelease("W")}
+                  onMouseLeave={() => manualRelease("W")}
+                >
+                  W
+                </button>
+
+                {/* E */}
+                <button
+                  className={`btn ${rotKey === "E" ? "btnPrimary" : "btnNeutral"}`}
+                  onMouseDown={() => rotatePress("E")}
+                  onMouseUp={rotateRelease}
+                  onMouseLeave={rotateRelease}
+                >
+                  E
+                </button>
+
+                {/* A */}
+                <button
+                  className={`btn ${driveKey === "A" ? "btnPrimary" : "btnNeutral"}`}
+                  onMouseDown={() => manualPress("A")}
+                  onMouseUp={() => manualRelease("A")}
+                  onMouseLeave={() => manualRelease("A")}
+                >
+                  A
+                </button>
+
+                {/* S */}
+                <button
+                  className={`btn ${driveKey === "S" ? "btnPrimary" : "btnNeutral"}`}
+                  onMouseDown={() => manualPress("S")}
+                  onMouseUp={() => manualRelease("S")}
+                  onMouseLeave={() => manualRelease("S")}
+                >
+                  S
+                </button>
+
+                {/* D */}
+                <button
+                  className={`btn ${driveKey === "D" ? "btnPrimary" : "btnNeutral"}`}
+                  onMouseDown={() => manualPress("D")}
+                  onMouseUp={() => manualRelease("D")}
+                  onMouseLeave={() => manualRelease("D")}
+                >
+                  D
+                </button>
               </div>
+
 
               <div style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center" }}>
                 <KeyBtn
-                  label="SPACE (HOLD)"
+                  label="STOP"
                   wide
                   danger
+                  active={stopHeld}              // ✅ ให้มีสถานะกดค้างเหมือนปุ่มอื่น
                   disabled={!connected}
-                  onDown={spaceDown}
-                  onUp={spaceUp}
+                  onDown={stopHoldPress}         // ✅ กดค้าง
+                  onUp={stopHoldRelease}         // ✅ ปล่อยแล้ว resume ถ้ามีปุ่มค้างอยู่
                 />
               </div>
 
               <div style={{ marginTop: 10, fontSize: 12, color: "var(--muted)", lineHeight: 1.35 }}>
-                Keyboard: <b>W A S D</b> to move • Hold <b>Space</b> to stop
+
               </div>
             </div>
 
-            {/* Controls */}
+            {/* Controls (ล่างสุด) ✅ ต้องมี div ครอบ ไม่งั้น </div> จะเพี้ยน */}
             <div style={{ marginTop: "auto", display: "grid", gap: 10 }}>
-              {/* ✅ Save DB (Auto Record) Button */}
-              <button
-                onClick={() => {
-                  const nextState = !isAutoRecording;
-                  setIsAutoRecording(nextState);
-                  if (nextState) {
-                    showToast("STARTED RECORDING DB", "success");
-                  } else {
-                    showToast("STOPPED RECORDING DB", "info");
-                  }
-                }}
-                className="btn"
-                style={{
-                  width: "100%",
-                  padding: 14,
-                  borderRadius: 12,
-                  background: isAutoRecording ? "rgba(234,179,8,0.20)" : "rgba(255,255,255,0.04)",
-                  borderColor: isAutoRecording ? "rgba(234,179,8,0.60)" : "var(--border)",
-                  color: isAutoRecording ? "#fbbf24" : "var(--text)",
-                }}
-              >
-                {isAutoRecording ? (
-                  <>
-                    <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#fbbf24", marginRight: 8, boxShadow: "0 0 8px #fbbf24" }} />
-                    RECORDING DB...
-                  </>
-                ) : (
-                  <>
-                    <div style={{ width: 10, height: 10, borderRadius: "50%", background: "var(--muted)", marginRight: 8 }} />
-                    REC DATABASE
-                  </>
-                )}
-              </button>
-
               <button
                 onClick={async () => {
-
                   if (isPaused) {
-                    // RESUME: แค่ปลดล็อคให้สั่งเดินได้ (ไม่ต้องยิงคำสั่งไป ESP32)
                     setIsPaused(false);
                     showToast("RESUME (unlocked)", "success");
                   } else {
-                    // PAUSE: สั่งหยุดจริง
                     await sendCmd({ cmd: "STOP" });
                     setIsPaused(true);
                     showToast("STOP (paused)", "success");
                   }
                 }}
-
                 className="btn"
                 style={{
                   width: "100%",
