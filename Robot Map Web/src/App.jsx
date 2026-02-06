@@ -1,219 +1,935 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
+/* ================== ICONS ================== */
+const Icons = {
+  Play: () => (
+    <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5 3l14 9-14 9V3z" />
+    </svg>
+  ),
+  Pause: () => (
+    <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+    </svg>
+  ),
+
+  Wifi: () => (
+    <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5 12.55a11 11 0 0114.08 0M1.64 9a15 15 0 0120.72 0M8.27 16a6 6 0 017.46 0M12 20h.01" />
+    </svg>
+  ),
+};
+
+/* ================== GLOBAL STYLES (เรียบ ๆ แบบคนทำ + เอาไปทำ Figma ง่าย) ================== */
+const GlobalStyles = () => (
+  <style>{`
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
+
+    :root{
+      /* tokens */
+      --bg: #0b1220;
+      --surface: #111a2b;
+      --surface2: #0f172a;
+      --border: rgba(255,255,255,0.10);
+
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+
+      --accent: #3b82f6;
+      --success: #16a34a;
+      --danger: #dc2626;
+      --warning: #f59e0b;
+
+      --shadow: 0 10px 22px rgba(0,0,0,0.22);
+
+      --r: 12px;
+      --r2: 10px;
+      --gap: 16px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body{
+      margin:0;
+      background: var(--bg);
+      font-family:'Inter', sans-serif;
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+      overflow-x:hidden;
+    }
+
+    .mono { font-family:'JetBrains Mono', monospace; }
+
+    /* panel/card */
+    .panel{
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      box-shadow: var(--shadow);
+    }
+
+    .panelTitle{
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+      letter-spacing: .08em;
+      margin-bottom: 12px;
+      text-transform: uppercase;
+    }
+
+    /* buttons */
+    .btn{
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      font-weight: 600;
+      user-select: none;
+
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+      color: var(--text);
+
+      transition: background .15s ease, filter .15s ease;
+    }
+    .btn:hover{ background: rgba(255,255,255,0.05); }
+    .btn:active{ filter: brightness(0.95); }
+    .btn:disabled{ opacity: .55; cursor: not-allowed; }
+
+    .btnPrimary{ background: rgba(59,130,246,0.95); border-color: rgba(59,130,246,0.40); }
+    .btnPrimary:hover{ background: rgba(59,130,246,1); }
+
+    .btnSuccess{ background: rgba(22,163,74,0.95); border-color: rgba(22,163,74,0.40); }
+    .btnSuccess:hover{ background: rgba(22,163,74,1); }
+
+    .btnNeutral{ background: rgba(255,255,255,0.05); }
+    .btnDanger{ background: rgba(220,38,38,0.95); border-color: rgba(220,38,38,0.35); }
+    .btnDanger:hover{ background: rgba(220,38,38,1); }
+
+    .btnGhost{
+      background: rgba(255,255,255,0.02);
+      border-color: var(--border);
+      color: var(--muted);
+    }
+    .btnGhost:hover{ background: rgba(255,255,255,0.05); color: var(--text); }
+
+    .btnIcon{
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      border-radius: 10px;
+    }
+
+    /* inputs */
+    input.cal-in{
+      border: 1px solid var(--border);
+      background: rgba(0,0,0,0.18);
+      color: var(--text);
+      outline: none;
+      border-radius: 10px;
+      padding: 8px 10px;
+      text-align: center;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      width: 76px;
+    }
+    input.cal-in:focus{
+      border-color: rgba(59,130,246,0.55);
+      box-shadow: 0 0 0 3px rgba(59,130,246,0.14);
+    }
+/* ✅ HIDE number arrows (spinner) */
+input.cal-in[type=number]::-webkit-outer-spin-button,
+input.cal-in[type=number]::-webkit-inner-spin-button{
+  -webkit-appearance: none;
+  margin: 0;
+}
+input.cal-in[type=number]{
+  -moz-appearance: textfield; /* Firefox */
+  appearance: textfield;
+}
+
+    /* slider */
+    input[type=range]{
+      -webkit-appearance:none;
+      width:100%;
+      background:transparent;
+    }
+    input[type=range]::-webkit-slider-thumb{
+      -webkit-appearance:none;
+      height: 14px; width: 14px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor:pointer;
+      margin-top:-5px;
+      box-shadow:none;
+    }
+    input[type=range]::-webkit-slider-runnable-track{
+      width:100%;
+      height: 4px;
+      cursor:pointer;
+      background: rgba(255,255,255,0.12);
+      border-radius: 999px;
+    }
+
+    /* simple spin (พอมีชีวิต แต่ไม่เว่อร์) */
+    @keyframes spin { 100% { transform: rotate(360deg); } }
+    .spin { animation: spin 1s linear infinite; }
+
+    /* scrollbar */
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.16); border-radius: 999px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); }
+  `}</style>
+);
 /* ================== CONFIG ================== */
-const ESP32_IP = "192.168.88.16";
-const SSE_URL = `http://${ESP32_IP}/pose`;
-const CMD_URL = `http://${ESP32_IP}/cmd`;
+// IP ตัวที่ "มีตำแหน่ง" (ต้องเปิดแล้วเจอ /json ได้)
+/* ================== CONFIG ================== */
+// IP ตัวที่ "มีตำแหน่ง" (192.168.88.53) -> Proxy: /pos
+const POS_BASE = "/pos";
 
-const FIELD_W = 3000; // mm
-const FIELD_H = 2000; // mm
+// IP ตัวที่ "รับคำสั่งคุมหุ่น" (192.168.88.115) -> Proxy: /robot
+const CMD_BASE = "/robot";
 
-const ZOOM_MIN = 0.05;
-const ZOOM_MAX = 0.25;
-const ZOOM_STEP = 0.01;
-const ANCHORS = [
-  { id: "A1", x_mm: 0, y_mm: 2000 },
-  { id: "A2", x_mm: 3000, y_mm: 2000 },
-  { id: "A3", x_mm: 0, y_mm: 0 },
-  { id: "A4", x_mm: 3000, y_mm: 0 },
-];
+// ดึงตำแหน่ง
+const API_URL = `${POS_BASE}/json`;
 
-/* ================== UTILS ================== */
-const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
-const mmToPx = (mm, scale) => mm * scale;
+// ส่งคำสั่งคุมหุ่น
+const CMD_URL = `${CMD_BASE}/cmd`;
 
-/* ================== APP ================== */
+// /cal /save /reset อยู่ฝั่ง POS (UWB) เป็นหลัก
+const api = (path) => `${POS_BASE}${path}`;
+
+
+const FIELD_W = 3000;
+const FIELD_H = 2000;
+
+const ZOOM_MIN = 0.05,
+  ZOOM_MAX = 0.4,
+  ZOOM_STEP = 0.01;
+
+/* ================== MANUAL DRIVE (TEST) ================== */
+// ✅ เปลี่ยน cmd ให้ตรงกับ ESP32/STM32 ของคุณได้เลย
+// ตัวอย่างถ้าคุณอยากส่งเป็น "W","A","S","D" ก็แก้ value เป็น "W" etc.
+const DRIVE_CMDS = {
+  W: "FWD",
+  A: "LEFT",
+  S: "BWD",
+  D: "RIGHT",
+};
+
+// หยุดตอนปล่อยปุ่มเดิน (หรือไม่มีปุ่มค้าง)
+const DRIVE_STOP_CMD = "STOP";
+
+// Spacebar behavior:
+// - "STOP"  = กดค้างส่ง STOP (ปล่อยแล้วถ้ายังค้าง WASD จะกลับไปส่งเดินต่อ)
+// - "PAUSE" = กดค้างส่ง PAUSE / ปล่อยส่ง RESUME (แนะนำถ้า STOP เป็น Emergency จริง)
+const SPACE_MODE = "STOP";
+
+/* ================== APP COMPONENT ================== */
 export default function App() {
-  /* ---------- canvas & view ---------- */
+  // ===== Calibration UI =====
+  const [refX, setRefX] = useState("");
+  const [refY, setRefY] = useState("");
+  const [calState, setCalState] = useState(0); // 0..4 from ESP32 json.cs
+
+  const CAL_TEXT = ["READY", "CALIBRATING...", "SUCCESS!", "FAILED", "RESET DONE"];
+  const CAL_COLOR = ["var(--muted)", "var(--warning)", "var(--success)", "var(--danger)", "var(--accent)"];
+
+  /* --- State: Canvas & Data --- */
   const canvasRef = useRef(null);
-  const [scale, setScale] = useState(0.12);
+  const [scale, setScale] = useState(0.15);
+
+  const [anchors, setAnchors] = useState([
+    { id: "A1", x_mm: 0, y_mm: 2000 },
+    { id: "A2", x_mm: 3000, y_mm: 2000 },
+    { id: "A3", x_mm: 0, y_mm: 0 },
+    { id: "A4", x_mm: 3000, y_mm: 0 },
+  ]);
+
+  const [ranges, setRanges] = useState({ A1: 0, A2: 0, A3: 0, A4: 0 });
+
+  // Tag1
+  const [pose, setPose] = useState({ x_mm: 0, y_mm: 0 });
+  // RMSE (ถ้ามีใน json)
+  const [rmse, setRmse] = useState(null);
+
+  /* --- State: System --- */
+  const [connected, setConnected] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [showTags, setShowTags] = useState(true);
+  const [toast, setToast] = useState({ show: false, msg: "", type: "info" });
+
+  /* --- State: Database & Recording --- */
+  const [dbPositions, setDbPositions] = useState([]); // ✅ เก็บข้อมูลจาก Database
+  const [isAutoRecording, setIsAutoRecording] = useState(false); // ✅ สถานะ Auto Record
+
+  /* --- Refs for Animation Loop --- */
+  const lastSaveRef = useRef(0); // ✅ สำหรับ Auto Record logic
   const scaleRef = useRef(scale);
+  const poseRef = useRef(pose);
+  const anchorsRef = useRef(anchors);
+  const isFetchingRef = useRef(false);
+  const missedHeartbeatsRef = useRef(0); // ✅ Heartbeat Counter
+  const showTagsRef = useRef(showTags);
+  const rangesRef = useRef(ranges);
+  const mouseRef = useRef({ x: 0, y: 0, active: false }); // ✅ Mouse tracking
+
   useEffect(() => {
     scaleRef.current = scale;
   }, [scale]);
-
-  const [center] = useState({
-    x_mm: FIELD_W / 2,
-    y_mm: FIELD_H / 2,
-  });
-
-  const centerRef = useRef(center);
   useEffect(() => {
-    centerRef.current = center;
-  }, [center]);
-  const stopRobot = () => {
-    sendCmd({ cmd: "STOP" }); // หยุดหุ่นจริง
+    anchorsRef.current = anchors;
+  }, [anchors]);
+  useEffect(() => {
+    showTagsRef.current = showTags;
+  }, [showTags]);
+  useEffect(() => {
+    rangesRef.current = ranges;
+  }, [ranges]);
+  useEffect(() => {
+    poseRef.current = pose;
+  }, [pose]);
+
+  /* --- Helper: Toast --- */
+  const showToast = (msg, type = "info") => {
+    setToast({ show: true, msg, type });
+    setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 2600);
   };
-  /* ---------- robot pose ---------- */
-  const poseRealRef = useRef(null);                 // ค่าจริงจาก ESP32
-  const [lastPose, setLastPose] = useState(null);
-  // 👉 state สำหรับแสดงผล x,y ด้านบน (realtime)
-  const [uiPose, setUiPose] = useState({ x_mm: 0, y_mm: 0 });
 
-  /* ---------- status ---------- */
-  const [connected, setConnected] = useState(false);
-  const [statusText, setStatusText] = useState("Connecting…");
-  /* ---------- UI toggle ---------- */
-  const [showPoseLabel, setShowPoseLabel] = useState(true);
-  const showPoseLabelRef = useRef(showPoseLabel);
-
-  useEffect(() => {
-    showPoseLabelRef.current = showPoseLabel;
-  }, [showPoseLabel]);
-
-  /* ================== SEND CMD ================== */
-  const sendCmd = async (payload) => {
+  /* --- API Actions --- */
+  const sendCmd = async ({ cmd }) => {
     try {
-      await fetch(CMD_URL, {
+      const res = await fetch(CMD_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ cmd }),   // ✅ ESP32 ต้องการ {cmd:"FWD"} แบบนี้
+        cache: "no-store",
       });
+
+      const txt = await res.text().catch(() => "");
+      if (!res.ok) console.error("CMD Error", res.status, txt);
+      return res.ok;
     } catch (e) {
-      console.error("CMD error", e);
+      console.error("CMD fetch failed:", e);
+      return false;
     }
   };
 
-  /* ================== CANVAS CLICK ================== */
-  const onCanvasClick = () => {
-    // ❌ ปิดนำทางชั่วคราว
+
+  // ===== Calibration Actions (GET endpoints like friend's ESP32) =====
+  const calT1 = async () => {
+    const x = parseFloat(refX);
+    const y = parseFloat(refY);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      showToast("REF must be numbers", "error");
+      return;
+    }
+
+    try {
+      const url = api(`/cal?x=${encodeURIComponent(x)}&y=${encodeURIComponent(y)}`);
+      const r = await fetch(url);
+      if (!r.ok) throw new Error("CAL failed");
+      showToast("CAL T1 started", "success");
+    } catch (e) {
+      console.error(e);
+      showToast("CAL T1 failed (check /cal endpoint)", "error");
+    }
   };
 
-  /* ================== SSE ================== */
+
+  const saveT1 = async () => {
+    try {
+      const r = await fetch(api("/save"));
+      if (!r.ok) throw new Error("SAVE failed");
+      showToast("SAVE T1 OK", "success");
+    } catch (e) {
+      console.error(e);
+      showToast("SAVE T1 failed (check /save endpoint)", "error");
+    }
+  };
+
+  const resetT1 = async () => {
+    try {
+      const r = await fetch(api("/reset"));
+      if (!r.ok) throw new Error("RESET failed");
+      showToast("RESET T1 OK", "success");
+    } catch (e) {
+      console.error(e);
+      showToast("RESET T1 failed (check /reset endpoint)", "error");
+    }
+  };
+
+  /* ================== MANUAL DRIVE LOGIC ================== */
+  const [driveKey, setDriveKey] = useState(null); // "W"/"A"/"S"/"D"/null
+  const pressedOrderRef = useRef([]); // เก็บลำดับปุ่มที่ค้าง (อันล่าสุดมี priority)
+  const spaceHeldRef = useRef(false);
+  const wasPausedBeforeSpaceRef = useRef(false);
+
+  const connectedRef2 = useRef(connected);
+  const isPausedRef2 = useRef(isPaused);
+
   useEffect(() => {
-    const es = new EventSource(SSE_URL);
+    connectedRef2.current = connected;
+  }, [connected]);
 
-    es.onopen = () => {
-      setConnected(true);
-      setStatusText("Connected (live)");
+  useEffect(() => {
+    isPausedRef2.current = isPaused;
+  }, [isPaused]);
+
+  const isTypingTarget = (el) => {
+    if (!el) return false;
+    const tag = (el.tagName || "").toUpperCase();
+    return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
+  };
+
+  const normalizeMoveKey = (k) => {
+    const up = String(k || "").toUpperCase();
+    return ["W", "A", "S", "D"].includes(up) ? up : null;
+  };
+
+  const computeActiveMoveKey = () => {
+    const arr = pressedOrderRef.current;
+    return arr.length ? arr[arr.length - 1] : null;
+  };
+
+  const applyManualDrive = async () => {
+    // if (!connectedRef2.current) return; // ✅ Allow drive even if 'Disconnected' (Pos)
+
+    // ถ้ากำลังกด Space อยู่ -> ให้หยุด override ไว้ก่อน
+    if (spaceHeldRef.current) return;
+
+    // ถ้าถูก Pause อยู่ (จาก UI) ไม่สั่งเดินซ้ำ
+    if (isPausedRef2.current) return;
+
+    const k = computeActiveMoveKey();
+    setDriveKey(k);
+
+    if (k) {
+      sendCmd({ cmd: DRIVE_CMDS[k] }); // 🔥 No await (fire and forget)
+    } else {
+      sendCmd({ cmd: DRIVE_STOP_CMD });
+    }
+  };
+
+  const manualPress = async (kRaw) => {
+    const k = normalizeMoveKey(kRaw);
+    if (!k) return;
+
+    const arr = pressedOrderRef.current;
+    if (!arr.includes(k)) arr.push(k);
+    await applyManualDrive();
+  };
+
+  const manualRelease = async (kRaw) => {
+    const k = normalizeMoveKey(kRaw);
+    if (!k) return;
+
+    pressedOrderRef.current = pressedOrderRef.current.filter((x) => x !== k);
+    await applyManualDrive();
+  };
+
+  const manualReleaseAll = async () => {
+    pressedOrderRef.current = [];
+    setDriveKey(null);
+
+    // if (!connectedRef2.current) return; // ✅ Allow safe stop on blur
+
+    // ปลอดภัย: หลุดโฟกัสแล้วสั่งหยุด
+    if (!spaceHeldRef.current) {
+      await sendCmd({ cmd: DRIVE_STOP_CMD });
+    }
+  };
+  const spaceDown = async () => {
+    // if (!connectedRef2.current) return;
+    if (spaceHeldRef.current) return;
+
+    spaceHeldRef.current = true;
+
+    // HOLD = STOP ครั้งเดียว
+    await sendCmd({ cmd: "STOP" });
+  };
+
+  const spaceUp = async () => {
+    // if (!connectedRef2.current) return;
+    if (!spaceHeldRef.current) return;
+
+    spaceHeldRef.current = false;
+
+    // ปล่อยแล้ว ถ้ายังค้าง WASD -> เดินต่อ
+    await applyManualDrive();
+  };
+
+  // ✅ Keyboard listeners: WASD + Spacebar (ใช้ e.code รองรับคีย์บอร์ดไทย/eng)
+  useEffect(() => {
+    const codeToMoveKey = (code) => {
+      if (code === "KeyW") return "W";
+      if (code === "KeyA") return "A";
+      if (code === "KeyS") return "S";
+      if (code === "KeyD") return "D";
+      return null;
     };
 
-    es.onerror = () => {
-      setConnected(false);
-      setStatusText("Disconnected… reconnecting");
+    const onKeyDown = (e) => {
+      if (isTypingTarget(e.target)) return;
+
+      // Spacebar
+      if (e.code === "Space") {
+        e.preventDefault();
+        spaceDown();
+        return;
+      }
+
+      const k = codeToMoveKey(e.code);
+      if (k) {
+        if (e.repeat) return;
+        e.preventDefault();
+        manualPress(k); // ส่ง "W"/"A"/"S"/"D"
+      }
     };
 
-    es.addEventListener("pose", (e) => {
-      try {
-        const j = JSON.parse(e.data);
-        poseRealRef.current = { x_mm: j.x_mm, y_mm: j.y_mm };
-        setUiPose({ x_mm: j.x_mm, y_mm: j.y_mm }); // realtime 1:1
-        setLastPose(j);
+    const onKeyUp = (e) => {
+      if (isTypingTarget(e.target)) return;
 
-      } catch { }
-    });
+      if (e.code === "Space") {
+        e.preventDefault();
+        spaceUp();
+        return;
+      }
 
-    return () => es.close();
+      const k = codeToMoveKey(e.code);
+      if (k) {
+        e.preventDefault();
+        manualRelease(k);
+      }
+    };
+
+    const onBlur = () => {
+      manualReleaseAll();
+      spaceHeldRef.current = false;
+    };
+
+    window.addEventListener("keydown", onKeyDown, { passive: false });
+    window.addEventListener("keyup", onKeyUp, { passive: false });
+    window.addEventListener("blur", onBlur);
+
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  /* ================== DRAW LOOP ================== */
+
+  /* --- Polling Data Loop (แก้ไขแล้ว) --- */
+  useEffect(() => {
+    // เพิ่มเป็น 100 (20 วินาที) เพื่อให้ขึ้น Online ค้างไว้นานที่สุดเท่าที่จะทำได้
+    const MAX_MISSED = 100;
+
+    const fetchDataWithHeartbeat = async () => {
+      if (isFetchingRef.current) return;
+      isFetchingRef.current = true;
+
+      try {
+        const fetchWithTimeout = (url, ms = 3000) =>
+          Promise.race([
+            fetch(url),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), ms))
+          ]);
+
+        const res = await fetchWithTimeout(API_URL);
+
+        if (!res.ok) throw new Error("Network error");
+        const j = await res.json();
+
+        // ✅ เชื่อมต่อสำเร็จ -> รีเซ็ต counter เป็น 0 และ set Connected
+        missedHeartbeatsRef.current = 0;
+        setConnected(true);
+
+        // ... Logic เดิม ...
+        const SWAP_XY = false;
+        const INVERT_X = false;
+        const INVERT_Y = false;
+
+        const applyCal = (x_m, y_m) => {
+          let rawX = x_m * 1000;
+          let rawY = y_m * 1000;
+          let finalX = SWAP_XY ? rawY : rawX;
+          let finalY = SWAP_XY ? rawX : rawY;
+          if (INVERT_X) finalX = FIELD_W - finalX;
+          if (INVERT_Y) finalY = FIELD_H - finalY;
+          return { x_mm: finalX, y_mm: finalY };
+        };
+
+        const xVal = Number(j.x);
+        const yVal = Number(j.y);
+        const tag1Ok = Number.isFinite(xVal) && Number.isFinite(yVal) && xVal !== -1 && yVal !== -1;
+
+        if (tag1Ok) setPose(applyCal(xVal, yVal));
+
+        if (j.a && Array.isArray(j.a)) {
+          const newRanges = {
+            A1: parseFloat(j.a[0]) || 0,
+            A2: parseFloat(j.a[1]) || 0,
+            A3: parseFloat(j.a[2]) || 0,
+            A4: parseFloat(j.a[3]) || 0,
+          };
+          rangesRef.current = newRanges;
+          setRanges(newRanges);
+        }
+
+        if (j.anch_xy && Array.isArray(j.anch_xy)) {
+          const newAnchors = j.anch_xy.map((p, i) => ({
+            id: `A${i + 1}`,
+            x_mm: p[0] * 1000,
+            y_mm: p[1] * 1000,
+          }));
+          if (newAnchors.length >= 3) setAnchors(newAnchors);
+        }
+
+        const r = Number(j.rmse);
+        if (Number.isFinite(r)) setRmse(r);
+
+        const cs = Number(j.cs);
+        if (Number.isFinite(cs)) setCalState(Math.max(0, Math.min(4, cs)));
+
+      } catch (err) {
+        // ❌ พลาด 1 ครั้ง -> เพิ่ม counter
+        missedHeartbeatsRef.current += 1;
+
+        // ถ้าพลาดเกินกำหนด ถึงจะยอมแพ้และขึ้น Disconnected
+        if (missedHeartbeatsRef.current >= MAX_MISSED) {
+          console.warn("Lost connection (max retries reached):", err);
+          setConnected(false);
+        } else {
+          // console.log(`Skipped packet (${missedHeartbeatsRef.current}/${MAX_MISSED})`);
+        }
+      } finally {
+        isFetchingRef.current = false;
+      }
+    };
+
+    // ✅ ปรับเป็น 200ms เพื่อความเสถียร
+    const intervalId = setInterval(fetchDataWithHeartbeat, 200);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, []);
+
+  // ✅ แยก Auto Record Interval ออกมา
+  useEffect(() => {
+    const autoSaveInterval = setInterval(() => {
+      if (!isAutoRecording) return;
+
+      const now = Date.now();
+      if (now - lastSaveRef.current < 1000) return; // บันทึกทุก 1 วิ
+
+      const currentPose = poseRef.current;
+      if (currentPose.x_mm !== 0 || currentPose.y_mm !== 0) {
+        const payload = {
+          x: Number((currentPose.x_mm / 1000).toFixed(2)),
+          y: Number((currentPose.y_mm / 1000).toFixed(2)),
+          name: "AUTO"
+        };
+
+        fetch("http://localhost:8000/positions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        }).then(() => {
+          lastSaveRef.current = now;
+        }).catch(e => console.error("Auto save failed", e));
+      }
+    }, 1000);
+
+    return () => clearInterval(autoSaveInterval);
+  }, [isAutoRecording]);
+
+  /* --- Canvas Drawing (ลด glow/ความ neon ให้ดูคนทำ) --- */
   useEffect(() => {
     const cvs = canvasRef.current;
     if (!cvs) return;
     const ctx = cvs.getContext("2d");
+    let raf;
 
-    let raf = 0;
+    const COLORS = {
+      bg: "#0f172a",
+      grid: "rgba(255,255,255,0.05)",
+      boundary: "rgba(59,130,246,0.35)",
+      anchorOn: "#16a34a",
+      anchorOff: "#64748b",
+      tag1: "#3b82f6",
+
+      labelBg: "rgba(17,26,43,0.92)",
+      labelBd: "rgba(255,255,255,0.10)",
+      text: "#e5e7eb",
+      muted: "#9ca3af",
+    };
+
+    const mmToPx = (mm, s) => mm * s;
+
+    const getBoundsFromAnchors = (anchorsList) => {
+      if (anchorsList && anchorsList.length) {
+        let minX = Infinity,
+          maxX = -Infinity,
+          minY = Infinity,
+          maxY = -Infinity;
+
+        for (const a of anchorsList) {
+          if (typeof a.x_mm !== "number" || typeof a.y_mm !== "number") continue;
+          minX = Math.min(minX, a.x_mm);
+          maxX = Math.max(maxX, a.x_mm);
+          minY = Math.min(minY, a.y_mm);
+          maxY = Math.max(maxY, a.y_mm);
+        }
+
+        if (isFinite(minX) && isFinite(maxX) && isFinite(minY) && isFinite(maxY) && minX !== maxX && minY !== maxY) {
+          return { minX, maxX, minY, maxY };
+        }
+      }
+      return { minX: 0, maxX: FIELD_W, minY: 0, maxY: FIELD_H };
+    };
+
+    const toPx = (x_mm, y_mm, cx, cy, s, bounds) => {
+      const midX = (bounds.minX + bounds.maxX) / 2;
+      const midY = (bounds.minY + bounds.maxY) / 2;
+      return {
+        px: cx + mmToPx(x_mm - midX, s),
+        py: cy + mmToPx(midY - y_mm, s),
+      };
+    };
+    const drawTriangle = (x, y, size, color, dir = "left") => {
+      ctx.save();
+      ctx.fillStyle = color;
+      ctx.beginPath();
+
+      if (dir === "left") {
+        // tip -> left
+        ctx.moveTo(x - size, y);
+        ctx.lineTo(x + size * 0.7, y - size * 0.85);
+        ctx.lineTo(x + size * 0.7, y + size * 0.85);
+      } else if (dir === "right") {
+        ctx.moveTo(x + size, y);
+        ctx.lineTo(x - size * 0.7, y - size * 0.85);
+        ctx.lineTo(x - size * 0.7, y + size * 0.85);
+      } else if (dir === "up") {
+        ctx.moveTo(x, y - size);
+        ctx.lineTo(x + size * 0.85, y + size * 0.7);
+        ctx.lineTo(x - size * 0.85, y + size * 0.7);
+      } else {
+        // down
+        ctx.moveTo(x, y + size);
+        ctx.lineTo(x + size * 0.85, y - size * 0.7);
+        ctx.lineTo(x - size * 0.85, y - size * 0.7);
+      }
+
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.strokeStyle = "rgba(255,255,255,0.18)";
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      ctx.restore();
+    };
+
+    const drawTagLabel = (text, x, y, above = true) => {
+      ctx.save();
+      ctx.font = "600 12px Inter";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+
+      const padX = 10;
+      const h = 22;
+      const w = ctx.measureText(text).width + padX * 2;
+      const bx = x - w / 2;
+      const by = above ? y - 26 - h : y + 26;
+
+      ctx.fillStyle = COLORS.labelBg;
+      ctx.strokeStyle = COLORS.labelBd;
+      ctx.lineWidth = 1;
+
+      ctx.beginPath();
+      ctx.roundRect(bx, by, w, h, 8);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = COLORS.text;
+      ctx.fillText(text, x, by + h / 2);
+      ctx.restore();
+    };
 
     const draw = () => {
-      const W = cvs.width;
-      const H = cvs.height;
-      const cx = W / 2;
-      const cy = H / 2;
+      const W = cvs.width,
+        H = cvs.height;
+      const cx = W / 2,
+        cy = H / 2;
+      const s = scaleRef.current;
+      const show = showTagsRef.current;
+      const currentRanges = rangesRef.current;
+      const anchorsNow = anchorsRef.current || [];
+      const bounds = getBoundsFromAnchors(anchorsNow);
 
-      const centerNow = centerRef.current;
-      const scaleNow = scaleRef.current;
-
-      const toPx = (x_mm, y_mm) => ({
-        px: cx + mmToPx(x_mm - centerNow.x_mm, scaleNow),
-        py: cy - mmToPx(y_mm - centerNow.y_mm, scaleNow),
-      });
-      /* ---- clear ---- */
-      ctx.fillStyle = "#0b1220";
+      // Clear
+      ctx.fillStyle = COLORS.bg;
       ctx.fillRect(0, 0, W, H);
 
-      /* ---- field ---- */
-      const p1 = toPx(0, 0);
-      const p2 = toPx(FIELD_W, 0);
-      const p3 = toPx(FIELD_W, FIELD_H);
-      const p4 = toPx(0, FIELD_H);
+      // Grid
+      ctx.strokeStyle = COLORS.grid;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      const STEP = 500;
 
+      const xStart = Math.floor(bounds.minX / STEP) * STEP;
+      const xEnd = Math.ceil(bounds.maxX / STEP) * STEP;
+      for (let x = xStart; x <= xEnd; x += STEP) {
+        let p1 = toPx(x, bounds.minY, cx, cy, s, bounds);
+        let p2 = toPx(x, bounds.maxY, cx, cy, s, bounds);
+        ctx.moveTo(p1.px, p1.py);
+        ctx.lineTo(p2.px, p2.py);
+      }
 
-      ctx.strokeStyle = "rgba(34,197,94,0.6)";
+      const yStart = Math.floor(bounds.minY / STEP) * STEP;
+      const yEnd = Math.ceil(bounds.maxY / STEP) * STEP;
+      for (let y = yStart; y <= yEnd; y += STEP) {
+        let p1 = toPx(bounds.minX, y, cx, cy, s, bounds);
+        let p2 = toPx(bounds.maxX, y, cx, cy, s, bounds);
+        ctx.moveTo(p1.px, p1.py);
+        ctx.lineTo(p2.px, p2.py);
+      }
+      ctx.stroke();
+
+      // Boundary
+      const b1 = toPx(bounds.minX, bounds.minY, cx, cy, s, bounds);
+      const b2 = toPx(bounds.maxX, bounds.minY, cx, cy, s, bounds);
+      const b3 = toPx(bounds.maxX, bounds.maxY, cx, cy, s, bounds);
+      const b4 = toPx(bounds.minX, bounds.maxY, cx, cy, s, bounds);
+
+      ctx.strokeStyle = COLORS.boundary;
+      ctx.setLineDash([8, 8]);
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(p1.px, p1.py);
-      ctx.lineTo(p2.px, p2.py);
-      ctx.lineTo(p3.px, p3.py);
-      ctx.lineTo(p4.px, p4.py);
+      ctx.moveTo(b1.px, b1.py);
+      ctx.lineTo(b2.px, b2.py);
+      ctx.lineTo(b3.px, b3.py);
+      ctx.lineTo(b4.px, b4.py);
       ctx.closePath();
       ctx.stroke();
-      /* ---- anchors ---- */
-      ctx.font = "12px Arial";
-      ctx.textAlign = "left";
-      ctx.textBaseline = "top";
+      ctx.setLineDash([]);
 
-      for (const a of ANCHORS) {
-        const { px, py } = toPx(a.x_mm, a.y_mm);
+      // Anchors
+      for (const a of anchorsRef.current) {
+        const { px, py } = toPx(a.x_mm, a.y_mm, cx, cy, s, bounds);
 
-        // จุด anchor
-        ctx.fillStyle = "#e5e7eb";
+        const rangeVal = currentRanges[a.id] || 0;
+        const isOnline = rangeVal > 0;
+
+        ctx.fillStyle = isOnline ? COLORS.anchorOn : COLORS.anchorOff;
         ctx.beginPath();
-        ctx.arc(px, py, 5, 0, Math.PI * 2);
+        ctx.arc(px, py, isOnline ? 5 : 4, 0, Math.PI * 2);
         ctx.fill();
 
-        // label
-        ctx.fillStyle = "rgba(255,255,255,0.85)";
-        ctx.fillText(a.id, px + 8, py - 14);
-      }
-      /* ---- robot ---- */
-      if (!poseRealRef.current) {
-        raf = requestAnimationFrame(draw);
-        return;
-      }
-
-      const { x_mm, y_mm } = poseRealRef.current;
-      const { px, py } = toPx(x_mm, y_mm);
-
-      ctx.fillStyle = "#22c55e55";
-      ctx.beginPath();
-      ctx.arc(px, py, 18, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.fillStyle = "#22c55e";
-      ctx.beginPath();
-      ctx.arc(px, py, 7, 0, Math.PI * 2);
-      ctx.fill();
-      /* ---- robot pose label (x,y) ---- */
-      if (showPoseLabelRef.current) {
-
-        // ถ้ามีค่าจริงจาก ESP32 ใช้ real
-        // ถ้ายังไม่มา ใช้ค่า smooth แทน
-        const src = poseRealRef.current;
-
-        if (src) {
-          ctx.font = "12px Arial";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "bottom";
-
-          const label = `x:${src.x_mm.toFixed(0)}  y:${src.y_mm.toFixed(0)}`;
-
-          const padding = 4;
-          const metrics = ctx.measureText(label);
-          const w = metrics.width + padding * 2;
-          const h = 16;
-
-          ctx.fillStyle = "rgba(15,23,42,0.85)";
-          ctx.strokeStyle = "#38bdf8";
+        if (show) {
+          ctx.strokeStyle = isOnline ? "rgba(22,163,74,0.30)" : "rgba(148,163,184,0.20)";
           ctx.lineWidth = 1;
 
           ctx.beginPath();
-          ctx.roundRect(px - w / 2, py - 26 - h, w, h, 6);
+          ctx.arc(px, py, 14, 0, Math.PI * 2);
+          ctx.stroke();
+
+          ctx.fillStyle = isOnline ? COLORS.text : COLORS.muted;
+          ctx.font = "600 13px Inter";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "alphabetic";
+
+          const labelText = `${a.id} ${rangeVal.toFixed(2)}m`;
+          ctx.fillText(labelText, px, py - 18);
+        }
+      }
+
+      // Tag1 (Only)
+      const t1 = poseRef.current;
+
+      const t1Finite = Number.isFinite(t1.x_mm) && Number.isFinite(t1.y_mm);
+      if (t1Finite) {
+        const p1 = toPx(t1.x_mm, t1.y_mm, cx, cy, s, bounds);
+
+        // draw Tag1
+        drawTriangle(p1.px, p1.py, 10, COLORS.tag1, "left");
+        if (show) drawTagLabel("Tag1 (Front)", p1.px, p1.py, true);
+
+        // XY label (Tag1)
+        if (show) {
+          ctx.save();
+          ctx.font = "11px JetBrains Mono";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "alphabetic";
+
+          const label = `X:${(t1.x_mm / 1000).toFixed(2)} Y:${(t1.y_mm / 1000).toFixed(2)}`;
+          const tw = ctx.measureText(label).width + 16;
+
+          ctx.fillStyle = COLORS.labelBg;
+          ctx.strokeStyle = COLORS.labelBd;
+          ctx.beginPath();
+          ctx.roundRect(p1.px - tw / 2, p1.py + 24, tw, 24, 6);
           ctx.fill();
           ctx.stroke();
 
-          ctx.fillStyle = "#e5e7eb";
-          ctx.fillText(label, px, py - 28);
+          ctx.fillStyle = COLORS.text;
+          ctx.fillText(label, p1.px, p1.py + 42);
+          ctx.restore();
         }
       }
+
+      // ✅ Mouse Hover Tooltip
+      if (mouseRef.current.active) {
+        const mx = mouseRef.current.x;
+        const my = mouseRef.current.y;
+
+        // Inverse Calcs
+        const midX = (bounds.minX + bounds.maxX) / 2;
+        const midY = (bounds.minY + bounds.maxY) / 2;
+
+        const mmX = (mx - cx) / s + midX;
+        const mmY = midY - (my - cy) / s;
+
+        const txt = `X:${(mmX / 1000).toFixed(2)} Y:${(mmY / 1000).toFixed(2)}`;
+
+        ctx.save();
+        ctx.font = "600 12px Inter";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "bottom";
+
+        // Draw crosshair
+        ctx.strokeStyle = "rgba(255,255,255,0.3)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(mx, 0); ctx.lineTo(mx, H);
+        ctx.moveTo(0, my); ctx.lineTo(W, my);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Tooltip
+        const pad = 6;
+        const tw = ctx.measureText(txt).width + pad * 2;
+        const th = 20;
+        const tx = mx + 10;
+        const ty = my - 10;
+
+        ctx.fillStyle = "rgba(0,0,0,0.8)";
+        ctx.strokeStyle = "rgba(255,255,255,0.2)";
+        ctx.beginPath();
+        ctx.roundRect(tx, ty - th, tw, th, 4);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = "#fff";
+        ctx.fillText(txt, tx + pad, ty - pad + 2);
+
+        ctx.restore();
+      }
+
 
       raf = requestAnimationFrame(draw);
     };
@@ -222,101 +938,464 @@ export default function App() {
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  /* ================== UI ================== */
+  /* ================== RENDER ================== */
+  const toastBg =
+    toast.type === "error"
+      ? "rgba(220,38,38,0.95)"
+      : toast.type === "success"
+        ? "rgba(22,163,74,0.95)"
+        : "rgba(59,130,246,0.95)";
+
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "#060a13",
-        color: "#fff",
-        fontFamily: "Arial",
-        display: "flex",
-        justifyContent: "center",   // ⬅️ จัดกลางแนวนอนทั้งหน้า
-      }}
-    >
-      {/* ===== Dashboard Container ===== */}
+    <>
+      <GlobalStyles />
+
+      {/* Toast (เรียบ ไม่เด้งแรง) */}
       <div
         style={{
-          width: "100%",
-          maxWidth: 1200,           // ⬅️ ไม่ให้กว้างเกิน
-          padding: 18,
+          position: "fixed",
+          top: 18,
+          right: 18,
+          zIndex: 99,
+          background: toastBg,
+          color: "#fff",
+          padding: "10px 14px",
+          borderRadius: 10,
+          border: "1px solid rgba(255,255,255,0.12)",
+          boxShadow: "0 10px 22px rgba(0,0,0,0.22)",
+          transform: toast.show ? "translateY(0)" : "translateY(-8px)",
+          opacity: toast.show ? 1 : 0,
+          transition: "opacity .18s ease, transform .18s ease",
+          fontWeight: 600,
+          fontSize: 13,
+          pointerEvents: "none",
         }}
       >
-        <h2>Robot Live Map</h2>
-        <div style={{ opacity: 0.8 }}>{statusText}</div>
+        {toast.msg}
+      </div>
 
-        <div style={{ margin: "10px 0" }}>
-          Position: x {uiPose.x_mm.toFixed(2)}, y {uiPose.y_mm.toFixed(2)}
-        </div>
-
-        <div style={{ marginBottom: 10, display: "flex", gap: 10 }}>
-          <button onClick={() => setScale((s) => clamp(s - ZOOM_STEP, ZOOM_MIN, ZOOM_MAX))}>−</button>
-          <input
-            type="range"
-            min={ZOOM_MIN}
-            max={ZOOM_MAX}
-            step={ZOOM_STEP}
-            value={scale}
-            onChange={(e) => setScale(parseFloat(e.target.value))}
-          />
-          <button onClick={() => setScale((s) => clamp(s + ZOOM_STEP, ZOOM_MIN, ZOOM_MAX))}>+</button>
-
-          {/* ⛔ STOP */}
-          <button
-            onClick={stopRobot}
-            style={{
-              marginLeft: 20,
-              background: "#ef4444",
-              color: "#fff",
-              borderRadius: 8,
-              padding: "6px 14px",
-              fontWeight: "bold",
-              border: "none",
-              cursor: "pointer",
-            }}
-          >
-            ⛔ STOP
-          </button>
-          <button
-            onClick={() => setShowPoseLabel(v => !v)}
-            style={{
-              background: "#334155",
-              color: "#fff",
-              borderRadius: 8,
-              padding: "6px 14px",
-              border: "1px solid #475569",
-              cursor: "pointer",
-            }}
-          >
-            {showPoseLabel ? "Hide x,y" : "Show x,y"}
-          </button>
-
-        </div>
-
-
-        {/* ===== MAP CENTER ===== */}
-        <div
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          flexDirection: "column",
+          maxWidth: 1400,
+          margin: "0 auto",
+          padding: 20,
+          gap: 16,
+        }}
+      >
+        {/* Header */}
+        <header
+          className="panel"
           style={{
+            padding: "16px 18px",
             display: "flex",
-            justifyContent: "center",
-            marginTop: 16,
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 16,
           }}
         >
-          <canvas
-            ref={canvasRef}
-            width={900}
-            height={520}
-            onClick={onCanvasClick}
-            style={{
-              maxWidth: "100%",
-              borderRadius: 14,
-              border: "1px solid rgba(255,255,255,0.10)",
-              background: "#0b1220",
-              cursor: "crosshair",
-            }}
-          />
+          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+            <div
+              style={{
+                width: 40,
+                height: 40,
+                background: "rgba(255,255,255,0.04)",
+                border: "1px solid rgba(255,255,255,0.10)",
+                borderRadius: 10,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "var(--muted)",
+              }}
+              title="ESP32: Dual Setup (Pos=.53, Cmd=.115)"
+            >
+              <Icons.Wifi />
+            </div>
+
+            <div>
+              <h1 style={{ margin: 0, fontSize: 18, fontWeight: 700, letterSpacing: 0.2 }}>UWB Localization</h1>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+                <div
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: "50%",
+                    background: connected ? "var(--success)" : "var(--danger)",
+                  }}
+                />
+                <span style={{ fontSize: 13, color: connected ? "var(--success)" : "var(--danger)", fontWeight: 700 }}>
+                  {connected ? "ONLINE" : "DISCONNECTED"}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 22, alignItems: "center" }}>
+            <Metric label="COORD X" value={(pose.x_mm / 1000).toFixed(2)} unit="m" />
+            <Divider />
+            <Metric label="COORD Y" value={(pose.y_mm / 1000).toFixed(2)} unit="m" />
+            <Divider />
+            <Metric
+              label="RMSE"
+              value={rmse == null ? "--" : `${(rmse * 100).toFixed(1)} cm (${rmse.toFixed(3)} m)`}
+              unit=""
+            />
+          </div>
+        </header>
+
+        {/* Main Grid */}
+        <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 16, flex: 1 }}>
+          {/* Left Sidebar */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {/* Anchors + Calibration */}
+            <div className="panel" style={{ padding: 16 }}>
+              <div className="panelTitle">Anchor distances</div>
+              <div style={{ display: "grid", gap: 10 }}>
+                {Object.entries(ranges).map(([k, v]) => (
+                  <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+
+                    {/* ✅ แก้จุดที่ 1: ชื่อ A1, A2... ให้เป็นสีขาวสว่างสุด (#ffffff) */}
+                    <span style={{ color: "#ffffff", fontSize: 14, fontWeight: 700 }}>{k}</span>
+
+                    {/* ✅ แก้จุดที่ 2: ตัวเลขระยะทาง ให้สว่างขึ้น (เปลี่ยนจาก var(--muted) เป็น #ffffff หรือ var(--text)) */}
+                    {/* ถ้าอยากได้ขาวจั๊วะให้ใช้ "#ffffff" ถ้าอยากได้ขาวนวลๆ ให้ใช้ "var(--text)" */}
+                    <span className="mono" style={{ fontSize: 13, color: "#ffffff" }}>
+                      {v.toFixed(2)}m
+                    </span>
+
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <div className="panelTitle" style={{ margin: 0 }}>
+                    Tag1 calibration
+                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: CAL_COLOR[calState] || "var(--muted)" }}>{CAL_TEXT[calState] || "READY"}</div>
+                </div>
+
+                <div style={{ display: "grid", gap: 10 }}>
+                  {/* Row 1: REF inputs */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 12, color: "var(--muted)", fontWeight: 800 }}>REF</span>
+
+                    <input
+                      className="cal-in"
+                      type="number"
+                      step="0.01"
+                      value={refX}
+                      onChange={(e) => setRefX(e.target.value)}
+                      inputMode="decimal"
+                      onFocus={(e) => e.target.select()}
+                    />
+
+                    <input
+                      className="cal-in"
+                      type="number"
+                      step="0.01"
+                      value={refY}
+                      onChange={(e) => setRefY(e.target.value)}
+                      inputMode="decimal"
+                      onFocus={(e) => e.target.select()}
+                    />
+                  </div>
+
+                  {/* Row 2: Buttons (SAVE next to CAL) */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <button
+                      onClick={calT1}
+                      disabled={!connected}
+                      className="btn btnPrimary"
+                      style={{ height: 34, padding: "0 12px", borderRadius: 10 }}
+                    >
+                      CAL
+                    </button>
+
+                    <button
+                      onClick={saveT1}
+                      disabled={!connected}
+                      className="btn btnSuccess"
+                      style={{ height: 34, padding: "0 12px", borderRadius: 10 }}
+                    >
+                      SAVE
+                    </button>
+
+                    <button
+                      onClick={resetT1}
+                      disabled={!connected}
+                      className="btn btnNeutral"
+                      style={{ height: 34, padding: "0 12px", borderRadius: 10 }}
+                    >
+                      RESET
+                    </button>
+                  </div>
+
+                </div>
+                <div style={{ marginTop: 10, fontSize: 12, color: "var(--muted)", lineHeight: 1.35 }}>
+                </div>
+              </div>
+            </div>
+            {/* Manual Drive (TEST) */}
+            <div className="panel" style={{ padding: 16 }}>
+              <div className="panelTitle">Manual drive (test)</div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, maxWidth: 240 }}>
+                <div />
+                <KeyBtn
+                  label="W"
+                  active={driveKey === "W"}
+                  disabled={!connected || isPaused}
+                  onDown={() => manualPress("W")}
+                  onUp={() => manualRelease("W")}
+                />
+                <div />
+
+                <KeyBtn
+                  label="A"
+                  active={driveKey === "A"}
+                  disabled={!connected || isPaused}
+                  onDown={() => manualPress("A")}
+                  onUp={() => manualRelease("A")}
+                />
+                <KeyBtn
+                  label="S"
+                  active={driveKey === "S"}
+                  disabled={!connected || isPaused}
+                  onDown={() => manualPress("S")}
+                  onUp={() => manualRelease("S")}
+                />
+                <KeyBtn
+                  label="D"
+                  active={driveKey === "D"}
+                  disabled={!connected || isPaused}
+                  onDown={() => manualPress("D")}
+                  onUp={() => manualRelease("D")}
+                />
+              </div>
+
+              <div style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center" }}>
+                <KeyBtn
+                  label="SPACE (HOLD)"
+                  wide
+                  danger
+                  disabled={!connected}
+                  onDown={spaceDown}
+                  onUp={spaceUp}
+                />
+              </div>
+
+              <div style={{ marginTop: 10, fontSize: 12, color: "var(--muted)", lineHeight: 1.35 }}>
+                Keyboard: <b>W A S D</b> to move • Hold <b>Space</b> to stop
+              </div>
+            </div>
+
+            {/* Controls */}
+            <div style={{ marginTop: "auto", display: "grid", gap: 10 }}>
+              {/* ✅ Save DB (Auto Record) Button */}
+              <button
+                onClick={() => {
+                  const nextState = !isAutoRecording;
+                  setIsAutoRecording(nextState);
+                  if (nextState) {
+                    showToast("STARTED RECORDING DB", "success");
+                  } else {
+                    showToast("STOPPED RECORDING DB", "info");
+                  }
+                }}
+                className="btn"
+                style={{
+                  width: "100%",
+                  padding: 14,
+                  borderRadius: 12,
+                  background: isAutoRecording ? "rgba(234,179,8,0.20)" : "rgba(255,255,255,0.04)",
+                  borderColor: isAutoRecording ? "rgba(234,179,8,0.60)" : "var(--border)",
+                  color: isAutoRecording ? "#fbbf24" : "var(--text)",
+                }}
+              >
+                {isAutoRecording ? (
+                  <>
+                    <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#fbbf24", marginRight: 8, boxShadow: "0 0 8px #fbbf24" }} />
+                    RECORDING DB...
+                  </>
+                ) : (
+                  <>
+                    <div style={{ width: 10, height: 10, borderRadius: "50%", background: "var(--muted)", marginRight: 8 }} />
+                    REC DATABASE
+                  </>
+                )}
+              </button>
+
+              <button
+                onClick={async () => {
+
+                  if (isPaused) {
+                    // RESUME: แค่ปลดล็อคให้สั่งเดินได้ (ไม่ต้องยิงคำสั่งไป ESP32)
+                    setIsPaused(false);
+                    showToast("RESUME (unlocked)", "success");
+                  } else {
+                    // PAUSE: สั่งหยุดจริง
+                    await sendCmd({ cmd: "STOP" });
+                    setIsPaused(true);
+                    showToast("STOP (paused)", "success");
+                  }
+                }}
+
+                className="btn"
+                style={{
+                  width: "100%",
+                  padding: 14,
+                  borderRadius: 12,
+                  background: isPaused ? "rgba(22,163,74,0.20)" : "rgba(255,255,255,0.04)",
+                  borderColor: "var(--border)",
+                }}
+              >
+                {isPaused ? (
+                  <>
+                    <Icons.Play /> RESUME
+                  </>
+                ) : (
+                  <>
+                    <Icons.Pause /> PAUSE ROBOT
+                  </>
+                )}
+              </button>
+
+              <button
+                onClick={() => {
+                  sendCmd({ cmd: "STOP" });
+                  setIsPaused(false);
+                  showToast("EMERGENCY STOP TRIGGERED", "error");
+                }}
+                className="btn btnDanger"
+                style={{
+                  width: "100%",
+                  padding: 16,
+                  borderRadius: 12,
+                }}
+              >
+                ⛔ EMERGENCY STOP
+              </button>
+            </div>
+          </div>
+
+          {/* Right: Visualization */}
+          <div className="panel" style={{ padding: 0, position: "relative", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+            {/* Map Toolbar */}
+            <div style={{ position: "absolute", top: 12, right: 12, display: "flex", gap: 8, zIndex: 10 }}>
+              <button
+                onClick={() => setShowTags(!showTags)}
+                className="btn btnGhost"
+                style={{ height: 36, padding: "0 12px", borderRadius: 10, fontSize: 12 }}
+              >
+                {showTags ? "Hide tags" : "Show tags"}
+              </button>
+            </div>
+
+            {/* Canvas */}
+            <div style={{ flex: 1, background: "var(--surface2)", position: "relative" }}>
+              <canvas
+                ref={canvasRef}
+                width={1200} height={700}
+                style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", touchAction: "none" }}
+                onPointerMove={(e) => {
+                  const rect = e.target.getBoundingClientRect();
+                  const scaleX = e.target.width / rect.width;
+                  const scaleY = e.target.height / rect.height;
+                  mouseRef.current = {
+                    x: (e.clientX - rect.left) * scaleX,
+                    y: (e.clientY - rect.top) * scaleY,
+                    active: true
+                  };
+                }}
+                onPointerLeave={() => {
+                  mouseRef.current.active = false;
+                }}
+              />
+            </div>
+
+            {/* Zoom Footer */}
+            <div
+              style={{
+                padding: "12px 14px",
+                borderTop: "1px solid var(--border)",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                background: "var(--surface)",
+              }}
+            >
+              <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 700 }}>MAP VIEW: {(scale * 100).toFixed(0)}%</span>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 10, width: 240 }}>
+                <button className="btn btnGhost" style={{ height: 30, width: 34, borderRadius: 10 }} onClick={() => setScale((s) => Math.max(ZOOM_MIN, s - ZOOM_STEP))}>
+                  −
+                </button>
+
+                <input type="range" min={ZOOM_MIN} max={ZOOM_MAX} step={ZOOM_STEP} value={scale} onChange={(e) => setScale(parseFloat(e.target.value))} />
+
+                <button className="btn btnGhost" style={{ height: 30, width: 34, borderRadius: 10 }} onClick={() => setScale((s) => Math.min(ZOOM_MAX, s + ZOOM_STEP))}>
+                  +
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
+
+/* ================== SUB COMPONENTS ================== */
+const Divider = () => <div style={{ width: 1, height: 34, background: "var(--border)" }} />;
+
+const Metric = ({ label, value, unit }) => (
+  <div>
+    <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", letterSpacing: 0.5, marginBottom: 4 }}>{label}</div>
+    <div style={{ fontSize: 22, fontWeight: 500, fontFamily: "'JetBrains Mono', monospace", color: "var(--text)" }}>
+      {value}
+      {unit ? <span style={{ fontSize: 13, color: "var(--muted)", marginLeft: 4 }}>{unit}</span> : null}
+    </div>
+  </div>
+);
+const KeyBtn = ({ label, active, disabled, onDown, onUp, wide = false, danger = false }) => {
+  const baseBg = danger ? "rgba(220,38,38,0.20)" : "rgba(255,255,255,0.04)";
+  const activeBg = danger ? "rgba(220,38,38,0.35)" : "rgba(59,130,246,0.22)";
+
+  const baseBd = danger ? "rgba(220,38,38,0.35)" : "var(--border)";
+  const activeBd = danger ? "rgba(220,38,38,0.60)" : "rgba(59,130,246,0.55)";
+
+  return (
+    <button
+      className="btn"
+      disabled={disabled}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        e.currentTarget.setPointerCapture?.(e.pointerId);
+        onDown?.();
+      }}
+      onPointerUp={(e) => {
+        e.preventDefault();
+        onUp?.();
+      }}
+      onPointerLeave={() => onUp?.()}
+      onPointerCancel={() => onUp?.()}
+      style={{
+        height: 44,
+        borderRadius: 12,
+        fontWeight: 800,
+        letterSpacing: 0.5,
+        background: active ? activeBg : baseBg,
+        borderColor: active ? activeBd : baseBd,
+        width: wide ? "100%" : "auto",
+        gridColumn: wide ? "1 / -1" : undefined,
+      }}
+      title={label}
+    >
+      {label}
+    </button>
+  );
+};
