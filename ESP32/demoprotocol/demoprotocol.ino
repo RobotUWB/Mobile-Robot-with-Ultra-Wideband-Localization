@@ -52,6 +52,8 @@ void sendToSTM32(String cmd) {
   else if (cmd == "BWD") serialCmd = "V,-300,0";
   else if (cmd == "LEFT") serialCmd = "V,250,150";
   else if (cmd == "RIGHT") serialCmd = "V,250,-150";
+  else if (cmd == "ROTL") serialCmd = "V,0,200";  // Spin Left
+  else if (cmd == "ROTR") serialCmd = "V,0,-200"; // Spin Right
   else if (cmd == "STOP") serialCmd = "S";
   
   if(serialCmd != "") {
@@ -71,6 +73,8 @@ void handleCommand() {
     else if (body.indexOf("BWD") >= 0) cmd = "BWD";
     else if (body.indexOf("LEFT") >= 0) cmd = "LEFT";
     else if (body.indexOf("RIGHT") >= 0) cmd = "RIGHT";
+    else if (body.indexOf("ROTL") >= 0) cmd = "ROTL";
+    else if (body.indexOf("ROTR") >= 0) cmd = "ROTR";
     else if (body.indexOf("STOP") >= 0) cmd = "STOP";
 
     if (cmd != "") {
