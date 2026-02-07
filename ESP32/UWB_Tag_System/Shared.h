@@ -38,7 +38,7 @@ static constexpr float MIN_RANGE_M = 0.10f;
 static constexpr float MAX_RANGE_M = 15.00f;
 
 // =================== FILTERING ===================+
-static constexpr int MED_N = 5;
+static constexpr int MED_N = 3; // ลดจาก 5 เหลือ 3 เพื่อความเร็ว
 static constexpr float MAX_JUMP_M = 3.00f;
 
 // เพิ่มค่า Alpha เป็น 0.30 เพื่อให้การตอบสนองระยะทาง Real-time มากขึ้น

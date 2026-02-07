@@ -256,7 +256,10 @@ export default function App() {
   const [ranges, setRanges] = useState({ A1: 0, A2: 0, A3: 0, A4: 0 });
 
   // Tag1
-  const [pose, setPose] = useState({ x_mm: 0, y_mm: 0 });
+  const [pose, setPose] = useState({ x_mm: 0, y_mm: 0, yaw: 0 });
+  const [yawOffset, setYawOffset] = useState(() => {
+    return parseFloat(localStorage.getItem("uwb_yaw_offset") || "0");
+  });
   // RMSE (ถ้ามีใน json)
   const [rmse, setRmse] = useState(null);
 
@@ -274,6 +277,7 @@ export default function App() {
   const missedHeartbeatsRef = useRef(0); // ✅ Heartbeat Counter
   const showTagsRef = useRef(showTags);
   const rangesRef = useRef(ranges);
+  const yawOffsetRef = useRef(0);
   const mouseRef = useRef({ x: 0, y: 0, active: false }); // ✅ Mouse tracking
 
   useEffect(() => {
@@ -291,6 +295,10 @@ export default function App() {
   useEffect(() => {
     poseRef.current = pose;
   }, [pose]);
+  useEffect(() => {
+    yawOffsetRef.current = yawOffset;
+    localStorage.setItem("uwb_yaw_offset", yawOffset.toString());
+  }, [yawOffset]);
 
   /* --- Helper: Toast --- */
   const showToast = (msg, type = "info") => {
@@ -359,6 +367,13 @@ export default function App() {
       console.error(e);
       showToast("RESET T1 failed (check /reset endpoint)", "error");
     }
+  };
+
+  const calDirection = () => {
+    // เซ็ตให้มุมปัจจุบันของหุ่น กลายเป็น 0 (หันซ้าย)
+    const currentYaw = poseRef.current.yaw || 0;
+    setYawOffset(currentYaw);
+    showToast("CAL DIRECTION OK", "success");
   };
 
   /* ================== MANUAL DRIVE LOGIC ================== */
@@ -571,9 +586,13 @@ export default function App() {
           ]);
 
         const res = await fetchWithTimeout(API_URL);
+        // ดึงมุมจาก STM32 (.115) 
+        const resStatus = await fetchWithTimeout(`${CMD_BASE}/status`);
 
-        if (!res.ok) throw new Error("Network error");
+        if (!res.ok || !resStatus.ok) throw new Error("Network error");
+
         const j = await res.json();
+        const jStatus = await resStatus.json(); // ข้อมูลจาก STM32
 
         // ✅ เชื่อมต่อสำเร็จ -> รีเซ็ต counter เป็น 0 และ set Connected
         missedHeartbeatsRef.current = 0;
@@ -596,6 +615,8 @@ export default function App() {
 
         const xVal = Number(j.x);
         const yVal = Number(j.y);
+        const angleVal = Number(jStatus.angle) || 0; // ดึงค่า angle มาใช้
+
         const tag1Ok = Number.isFinite(xVal) && Number.isFinite(yVal) && xVal !== -1 && yVal !== -1;
 
         if (tag1Ok) {
@@ -613,6 +634,7 @@ export default function App() {
           setPose({
             x_mm: clamp(p.x_mm, minX, maxX),
             y_mm: clamp(p.y_mm, minY, maxY),
+            yaw: angleVal // เก็บค่ามุมเข้าไปใน state pose
           });
         }
 
@@ -643,6 +665,7 @@ export default function App() {
         if (Number.isFinite(cs)) setCalState(Math.max(0, Math.min(4, cs)));
 
       } catch (err) {
+        // console.error("Poll Error:", err);
         // ❌ พลาด 1 ครั้ง -> เพิ่ม counter
         missedHeartbeatsRef.current += 1;
 
@@ -718,6 +741,26 @@ export default function App() {
         px: cx + mmToPx(x_mm - midX, s),
         py: cy + mmToPx(midY - y_mm, s),
       };
+    };
+    const drawRobot = (x, y, size, color, yawDeg) => {
+      ctx.save();
+      ctx.translate(x, y);
+      // ชดเชยให้ 0 องศาหันไปทาง "ซ้าย" (Front) และทวนเข็มตามค่า IMU
+      const angleRad = ((180 - yawDeg) * Math.PI) / 180;
+      ctx.rotate(angleRad);
+
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(size * 1.5, 0);
+      ctx.lineTo(-size, size);
+      ctx.lineTo(-size, -size);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.strokeStyle = "rgba(255,255,255,0.9)";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.restore();
     };
     const drawTriangle = (x, y, size, color, dir = "left") => {
       ctx.save();
@@ -874,9 +917,9 @@ export default function App() {
       if (t1Finite) {
         const p1 = toPx(t1.x_mm, t1.y_mm, cx, cy, s, bounds);
 
-        // draw Tag1
-        drawTriangle(p1.px, p1.py, 10, COLORS.tag1, "left");
-        if (show) drawTagLabel("Tag1 (Front)", p1.px, p1.py, true);
+        // วาดหุ่นแบบหมุนได้ (0 องศา = หันซ้าย)
+        drawRobot(p1.px, p1.py, 10, COLORS.tag1, (t1.yaw || 0) - yawOffsetRef.current);
+        if (show) drawTagLabel("Robot UWB", p1.px, p1.py, true);
 
         // XY label (Tag1)
         if (show) {
@@ -1058,6 +1101,8 @@ export default function App() {
             <Divider />
             <Metric label="COORD Y" value={(pose.y_mm / 1000).toFixed(2)} unit="m" />
             <Divider />
+            <Metric label="HEADING" value={((pose.yaw || 0) - yawOffset).toFixed(1)} unit="°" />
+            <Divider />
             <Metric
               label="RMSE"
               value={rmse == null ? "--" : `${(rmse * 100).toFixed(1)} cm (${rmse.toFixed(3)} m)`}
@@ -1129,6 +1174,16 @@ export default function App() {
                       style={{ height: 34, padding: "0 12px", borderRadius: 10 }}
                     >
                       CAL
+                    </button>
+
+                    <button
+                      onClick={calDirection}
+                      disabled={!connected}
+                      className="btn btnNeutral"
+                      style={{ height: 34, padding: "0 12px", borderRadius: 10 }}
+                      title="Set Current Direction as 0 (Front)"
+                    >
+                      CAL DIR
                     </button>
 
                     <button
