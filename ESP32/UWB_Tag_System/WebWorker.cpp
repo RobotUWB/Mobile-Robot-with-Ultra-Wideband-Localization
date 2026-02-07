@@ -4,46 +4,67 @@
 #include <WebServer.h>
 #include <esp_now.h> 
 
+// [เพิ่ม] Library สำหรับแก้ปัญหา Brownout (ไฟตกแล้วรีเซ็ต)
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
+
+// ประกาศ WebSocket ที่ Port 81
+WebSocketsServer webSocket = WebSocketsServer(81);
+
 // บรรทัดที่ประมาณ 6 ใน UwbWorker.cpp
 static bool is_busy_saving = false;
 
 // =================== WIFI CONFIG ===================
-// --- ส่วนของ AP Mode (ปล่อย WiFi เอง) ---
 static const char *AP_SSID = "UWB_TAG1_ESP32";
 static const char *AP_PASS = "12345678";
 
-// [FIX] แก้ IP ของ Hotspot ตัวเองให้เป็น 192.168.4.1 
-// เพื่อไม่ให้ชนกับ Router (192.168.88.1)
 static const IPAddress AP_IP(192, 168, 4, 1);
 static const IPAddress AP_GW(192, 168, 4, 1);
 static const IPAddress AP_SN(255, 255, 255, 0);
 
-// --- ส่วนของ STA Mode (เกาะ Router) ---
 static const char *STA_SSID = "GMR";
 static const char *STA_PASS = "12123121211212312121";
 
-// [ADDED] ส่วนที่เพิ่ม: กำหนด Fix IP ที่ต้องการตรงนี้
-static const IPAddress STA_FIX_IP(192, 168, 88, 99);   // IP ที่คุณต้องการ
-static const IPAddress STA_FIX_GW(192, 168, 88, 1);    // Gateway (IP ของ Router)
-static const IPAddress STA_FIX_SN(255, 255, 255, 0);   // Subnet Mask
+static const IPAddress STA_FIX_IP(192, 168, 88, 99);   
+static const IPAddress STA_FIX_GW(192, 168, 88, 1);    
+static const IPAddress STA_FIX_SN(255, 255, 255, 0);   
 
 WebServer server(80);
 
-// =================== HTML DASHBOARD (CLEAN VERSION) ===================+
+// ฟังก์ชันสร้าง JSON (ใช้ร่วมกันทั้ง HTTP และ WebSocket)
+String buildJson() {
+  String json = "{";
+  json += "\"x\":" + String(have_xy ? x_f : -1.0f, 3) + ",";
+  json += "\"y\":" + String(have_xy ? y_f : -1.0f, 3) + ",";
+  json += "\"rmse\":" + String(last_rmse, 4) + ",";
+  json += "\"n\":" + String(last_n) + ",";
+  json += "\"ok\":" + String(last_accept ? 1 : 0) + ",";
+  
+  bool t2_online = (millis() - t2_last_ms < 3000); 
+  json += "\"t2\":{\"ok\":" + String(t2_online ? 1 : 0) + ",\"x\":" + String(t2_x, 2) + ",\"y\":" + String(t2_y, 2) + "},";
+
+  json += "\"cs\":" + String(cal_state) + ","; 
+  json += "\"a\":[\"" + anchorString(0) + "\",\"" + anchorString(1) + "\",\"" + anchorString(2) + "\",\"" + anchorString(3) + "\"],";
+  json += "\"field\":{\"w\":" + String(FIELD_W, 2) + ",\"h\":" + String(FIELD_H, 2) + "},";
+  json += "\"anch_xy\":[[0.0,0.0],[0.0,2.0],[3.0,0.0],[3.0,2.0]]";
+  
+  json += "}";
+  return json;
+}
+
+// =================== HTML DASHBOARD (WEBSOCKET VERSION) ===================
 static const char INDEX_HTML[] PROGMEM = R"HTML(
 <!doctype html>
 <html>
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no"/>
-<title>UWB Monitor Pro - Multi Tag</title>
+<title>UWB Monitor Pro - Multi Tag (WS)</title>
 <style>
   :root { 
     --bg: #09090b; --card: #18181b; --border: #27272a; 
     --text: #e4e4e7; --text-dim: #a1a1aa;
-    --accent: #3b82f6; --accent-glow: rgba(59, 130, 246, 0.15);
-    --green: #10b981; --red: #ef4444; --yellow: #eab308;
-    --cyan: #00d2ff;
+    --accent: #3b82f6; --green: #10b981; --red: #ef4444; --yellow: #eab308;
   }
   * { box-sizing: border-box; }
   body { 
@@ -64,7 +85,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
     display: flex; justify-content: space-between; align-items: center;
     background: rgba(255,255,255,0.02);
   }
-  .title { font-size: 14px; font-weight: 600; letter-spacing: 0.5px; color: var(--text-dim); text-transform: uppercase; }
+  .title { font-size: 14px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; }
   #map-wrapper { 
     position: relative; width: 100%; aspect-ratio: 16/9; 
     background: radial-gradient(circle at center, #1e1e24 0%, #09090b 100%);
@@ -101,7 +122,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
   <div class="card">
     <div class="header">
       <div class="title">Live Position Tracking</div>
-      <div id="status-badge" class="badge bg-bad">OFFLINE</div>
+      <div id="status-badge" class="badge bg-bad">CONNECTING...</div>
     </div>
     <div id="map-wrapper"><canvas id="cvs"></canvas></div>
     <div class="stats-row">
@@ -138,40 +159,79 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
 
 <script>
 const cvs = document.getElementById('cvs'), ctx = cvs.getContext('2d');
-// บรรทัด 129: แก้ FIELD_W ให้เป็น 3.0 และ FIELD_H เป็น 2.0
 let FIELD_W = 3.0, FIELD_H = 2.0; 
-const OFFSET_X = 0.0; // ตั้งค่า Offset เป็น 0 เพื่อให้ Tag1 ตรงกับพิกัดจริง
+const OFFSET_X = 0.0; 
 
+// --- WEBSOCKET SETUP ---
+let ws;
+function connectWs() {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  // เชื่อมต่อ WS ที่ Port 81
+  ws = new WebSocket(`ws://${window.location.hostname}:81/`);
+  
+  ws.onopen = function() {
+    console.log("WS Connected");
+    document.getElementById('status-badge').textContent = "ONLINE (WS)";
+    document.getElementById('status-badge').className = "badge bg-ok";
+  };
+
+  ws.onmessage = function(event) {
+    try {
+      const j = JSON.parse(event.data);
+      updateDashboard(j);
+    } catch(e) { console.error(e); }
+  };
+
+  ws.onclose = function() {
+    console.log("WS Closed, reconnecting...");
+    document.getElementById('status-badge').textContent = "OFFLINE";
+    document.getElementById('status-badge').className = "badge bg-bad";
+    setTimeout(connectWs, 1000); 
+  };
+}
+
+// API Call for Buttons
 async function api(path){ const r=await fetch(path); return await r.text(); }
 function calp(){ api(`/calp?x=${document.getElementById('cx').value}&y=${document.getElementById('cy').value}`); }
 function save(){ api(`/save`); }
 function reset(){ api(`/reset`); }
 
-// ฟังก์ชันวาดรูปสามเหลี่ยม
+function updateDashboard(j) {
+    const t1_ui_x = j.x - OFFSET_X;
+    const t1_ui_y = j.y;
+    document.getElementById('t1_pos').textContent =
+      j.ok ? `${t1_ui_x.toFixed(2)}, ${t1_ui_y.toFixed(2)}` : "OFFLINE";
+
+    const errorM = j.rmse; 
+    const errorCm = errorM * 100;
+    document.getElementById('rmse').textContent = `${errorCm.toFixed(1)} cm (${errorM.toFixed(3)} m)`;
+
+    if(j.a) j.a.forEach((v,i)=>document.getElementById('a'+(i+1)).textContent=v+" m");
+    
+    const ms=document.getElementById('cal-msg');
+    ms.textContent=["READY","CALIBRATING...","SUCCESS!","FAILED","RESET DONE"][j.cs]||"READY";
+    ms.style.color=["#aaa","#eab308","#10b981","#ef4444","#3b82f6"][j.cs]||"#aaa";
+    
+    drawMap(j);
+}
+
 function drawTriangle(x, y, size, color, label, direction) {
   ctx.beginPath();
   if(direction === 'left') {
-    ctx.moveTo(x - size, y);          // ยอดแหลมไปทางซ้าย
-    ctx.lineTo(x + size, y - size);   // มุมขวาบน
-    ctx.lineTo(x + size, y + size);   // มุมขวาล่าง
+    ctx.moveTo(x - size, y);          
+    ctx.lineTo(x + size, y - size);   
+    ctx.lineTo(x + size, y + size);   
   } else {
-    // โค้ดเดิมสำหรับชี้ขึ้น/ลง (ถ้ายังอยากเก็บไว้)
-    if(direction === true) {
-      ctx.moveTo(x, y - size);
-      ctx.lineTo(x - size, y + size);
-      ctx.lineTo(x + size, y + size);
-    } else {
       ctx.moveTo(x, y + size);
       ctx.lineTo(x - size, y - size);
       ctx.lineTo(x + size, y - size);
-    }
   }
   ctx.closePath();
   ctx.fillStyle = color;
   ctx.fill();
   ctx.fillStyle = '#fff';
   ctx.textAlign = 'center';
-  ctx.fillText(label, x, y + 35); // ปรับตำแหน่งข้อความให้อยู่ใต้รูป
+  ctx.fillText(label, x, y + 35);
 }
 
 function drawMap(j) {
@@ -181,20 +241,15 @@ function drawMap(j) {
   const W = wrapper.clientWidth, H = wrapper.clientHeight;
   if(j.field){ FIELD_W = j.field.w; FIELD_H = j.field.h; }
 
-  // ระยะเว้นจากขอบ Canvas เข้ามาด้านใน (พิกเซล) ยิ่งน้อยสนามยิ่งใหญ่เต็มจอ
   const pad = 60;
-
   const sc = Math.min((W - pad*2) / FIELD_W, (H - pad*2) / FIELD_H);
   const ox = (W - (FIELD_W * sc)) / 2, oy = (H - (FIELD_H * sc)) / 2;
   const tx = (x) => ox + (x * sc), ty = (y) => H - oy - (y * sc);
 
   ctx.clearRect(0,0,W,H);
-
-  // วาดเฉพาะขอบสนาม (ลบ Loop ตารางออกแล้ว)
   ctx.strokeStyle = '#27272a'; 
   ctx.strokeRect(tx(0), ty(FIELD_H), FIELD_W * sc, FIELD_H * sc);
 
-  // Anchors
   if(j.anch_xy) {
     ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
     j.anch_xy.forEach((p, i) => {
@@ -207,49 +262,15 @@ function drawMap(j) {
     });
   }
 
- // DRAW LOGIC: แสดงผลเฉพาะ Tag 1 เท่านั้น
-if(j.ok || j.x > -0.5) {
-  // 1. กำหนดพิกัดหลักจากบอร์ด (Tag 1) และทำการ Clamp ให้อยู่ในขอบเขตสนาม
-  const t1_logic_x = Math.max(0, Math.min(j.x, FIELD_W)); 
-  const t1_logic_y = Math.max(0, Math.min(j.y, FIELD_H));
-
-  // อัปเดตตัวเลขพิกัดบน Dashboard เฉพาะ Tag 1
-  document.getElementById('t1_pos').textContent = j.ok ? `${t1_logic_x.toFixed(2)}, ${t1_logic_y.toFixed(2)}` : "OFFLINE";
-
-  // 2. แปลงพิกัดเมตรเป็นพิกเซลบนจอ
-  const t1x = tx(t1_logic_x), t1y = ty(t1_logic_y);
-
-  // 3. วาดรูปสามเหลี่ยมแสดงตำแหน่ง Tag 1 จุดเดียว
-  drawTriangle(t1x, t1y, 10, '#3b82f6', 'Tag 1', 'left');
-}
+  if(j.ok || j.x > -0.5) {
+    const t1_logic_x = Math.max(0, Math.min(j.x, FIELD_W)); 
+    const t1_logic_y = Math.max(0, Math.min(j.y, FIELD_H));
+    const t1x = tx(t1_logic_x), t1y = ty(t1_logic_y);
+    drawTriangle(t1x, t1y, 10, '#3b82f6', 'Tag 1', 'left');
+  }
 }
 
-async function tick(){
-  try {
-    const r = await fetch('/json'); const j = await r.json();
-    const t1_ui_x = j.x - OFFSET_X;
-    const t1_ui_y = j.y;
-    document.getElementById('t1_pos').textContent =
-      j.ok ? `${t1_ui_x.toFixed(2)}, ${t1_ui_y.toFixed(2)}` : "OFFLINE";
-
-    // --- ส่วนที่แก้ไข: การแสดงผล RMSE ---
-    const errorM = j.rmse; 
-    const errorCm = errorM * 100;
-    // แสดงผลเป็น "XX.X cm (X.XXX m)"
-    document.getElementById('rmse').textContent = `${errorCm.toFixed(1)} cm (${errorM.toFixed(3)} m)`;
-    // ---------------------------------
-
-    document.getElementById('status-badge').className = j.ok ? "badge bg-ok" : "badge bg-bad";
-    document.getElementById('status-badge').textContent = j.ok ? "ONLINE" : "SEARCHING";
-    if(j.a) j.a.forEach((v,i)=>document.getElementById('a'+(i+1)).textContent=v+" m");
-    const ms=document.getElementById('cal-msg');
-    ms.textContent=["READY","CALIBRATING...","SUCCESS!","FAILED","RESET DONE"][j.cs]||"READY";
-    ms.style.color=["#aaa","#eab308","#10b981","#ef4444","#3b82f6"][j.cs]||"#aaa";
-    drawMap(j);
-  } catch(e){}
-  setTimeout(tick, 200);
-}
-tick();
+connectWs();
 </script>
 </body>
 </html>
@@ -268,27 +289,9 @@ static void handleIndex() {
 
 static void handleInfo() { server.send(200, "text/plain", "UWB System Online"); }
 
+// ยังเก็บ HTTP JSON ไว้เผื่อ debug
 static void handleJson() {
-  String json = "{";
-  json += "\"x\":" + String(have_xy ? x_f : -1.0f, 3) + ",";
-  json += "\"y\":" + String(have_xy ? y_f : -1.0f, 3) + ",";
-  json += "\"rmse\":" + String(last_rmse, 4) + ",";
-  json += "\"n\":" + String(last_n) + ",";
-  json += "\"ok\":" + String(last_accept ? 1 : 0) + ",";
-  
-  bool t2_online = (millis() - t2_last_ms < 3000); 
-  json += "\"t2\":{\"ok\":" + String(t2_online ? 1 : 0) + ",\"x\":" + String(t2_x, 2) + ",\"y\":" + String(t2_y, 2) + "},";
-
-  json += "\"cs\":" + String(cal_state) + ","; 
-  json += "\"a\":[\"" + anchorString(0) + "\",\"" + anchorString(1) + "\",\"" + anchorString(2) + "\",\"" + anchorString(3) + "\"],";
-  json += "\"field\":{\"w\":" + String(FIELD_W, 2) + ",\"h\":" + String(FIELD_H, 2) + "},";
-  
-  // แก้ไขบรรทัดนี้ให้ลำดับ [x,y] ตรงกับ A1, A2, A3, A4
-  // A1(0,0), A2(0,2), A3(3,0), A4(3,2)
-  json += "\"anch_xy\":[[0.0,0.0],[0.0,2.0],[3.0,0.0],[3.0,2.0]]";
-  
-  json += "}";
-  server.send(200, "application/json", json);
+  server.send(200, "application/json", buildJson());
 }
 
 static void calStart(bool multi, float x, float y) {
@@ -319,14 +322,35 @@ static void handleReset() {
   server.send(200, "text/plain", "Reset");
 }
 
+// WebSocket Event Callback
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
+  switch(type) {
+    case WStype_DISCONNECTED:
+      Serial.printf("[%u] Disconnected!\n", num);
+      break;
+    case WStype_CONNECTED:
+      {
+        IPAddress ip = webSocket.remoteIP(num);
+        Serial.printf("[%u] Connected from %d.%d.%d.%d url: %s\n", num, ip[0], ip[1], ip[2], ip[3], payload);
+        
+        // [แก้ไข] สร้างตัวแปร String มารับค่าก่อนส่ง เพื่อป้องกัน Error lvalue reference
+        String json = buildJson(); 
+        webSocket.sendTXT(num, json); 
+      }
+      break;
+    case WStype_TEXT:
+      break;
+  }
+}
+
 void setupWeb() {
+  // [แก้ไข] ปิด Brownout Detector ทันทีที่เข้า Setup เพื่อป้องกันบอร์ดรีเซ็ตเอง
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); 
+  
   WiFi.mode(WIFI_AP_STA);
-  // [FIXED] ใช้ AP_IP ตัวใหม่ (4.1) ที่ไม่ชนกับ Router
   WiFi.softAPConfig(AP_IP, AP_GW, AP_SN);
   WiFi.softAP(AP_SSID, AP_PASS);
 
-  // [ADDED] สั่ง Fix IP สำหรับขาที่เกาะ Router (STA)
-  // ต้องใส่บรรทัดนี้ *ก่อน* WiFi.begin
   if (!WiFi.config(STA_FIX_IP, STA_FIX_GW, STA_FIX_SN)) {
     Serial.println("[WIFI] STA Failed to configure Static IP!");
   }
@@ -341,6 +365,25 @@ void setupWeb() {
   server.on("/save", handleSave);
   server.on("/reset", handleReset);
   server.begin();
+
+  // เริ่มต้น WebSocket
+  webSocket.begin();
+  webSocket.onEvent(webSocketEvent);
+  Serial.println("[WS] WebSocket Server started on port 81");
 }
 
-void loopWeb() { server.handleClient(); }
+void loopWeb() { 
+  server.handleClient();
+  webSocket.loop(); // ต้องมีบรรทัดนี้
+
+  // ส่งข้อมูลทุก 50ms (20fps) เพื่อความลื่นไหล
+  static uint32_t last_ws_send = 0;
+  if (millis() - last_ws_send > 50) {
+    last_ws_send = millis();
+    if(webSocket.connectedClients() > 0) {
+        // [แก้ไข] สร้างตัวแปร String มารับค่าก่อนส่ง เพื่อป้องกัน Error lvalue reference
+        String json = buildJson();
+        webSocket.broadcastTXT(json);
+    }
+  }
+}
