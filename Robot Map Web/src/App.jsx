@@ -257,6 +257,9 @@ export default function App() {
 
   // Tag1
   const [pose, setPose] = useState({ x_mm: 0, y_mm: 0, yaw: 0 });
+  const [yawOffset, setYawOffset] = useState(() => {
+    return parseFloat(localStorage.getItem("uwb_yaw_offset") || "0");
+  });
   // RMSE (ถ้ามีใน json)
   const [rmse, setRmse] = useState(null);
 
@@ -274,6 +277,7 @@ export default function App() {
   const missedHeartbeatsRef = useRef(0); // ✅ Heartbeat Counter
   const showTagsRef = useRef(showTags);
   const rangesRef = useRef(ranges);
+  const yawOffsetRef = useRef(0);
   const mouseRef = useRef({ x: 0, y: 0, active: false }); // ✅ Mouse tracking
 
   useEffect(() => {
@@ -291,6 +295,10 @@ export default function App() {
   useEffect(() => {
     poseRef.current = pose;
   }, [pose]);
+  useEffect(() => {
+    yawOffsetRef.current = yawOffset;
+    localStorage.setItem("uwb_yaw_offset", yawOffset.toString());
+  }, [yawOffset]);
 
   /* --- Helper: Toast --- */
   const showToast = (msg, type = "info") => {
@@ -359,6 +367,13 @@ export default function App() {
       console.error(e);
       showToast("RESET T1 failed (check /reset endpoint)", "error");
     }
+  };
+
+  const calDirection = () => {
+    // เซ็ตให้มุมปัจจุบันของหุ่น กลายเป็น 0 (หันซ้าย)
+    const currentYaw = poseRef.current.yaw || 0;
+    setYawOffset(currentYaw);
+    showToast("CAL DIRECTION OK", "success");
   };
 
   /* ================== MANUAL DRIVE LOGIC ================== */
@@ -903,8 +918,8 @@ export default function App() {
         const p1 = toPx(t1.x_mm, t1.y_mm, cx, cy, s, bounds);
 
         // วาดหุ่นแบบหมุนได้ (0 องศา = หันซ้าย)
-        drawRobot(p1.px, p1.py, 10, COLORS.tag1, t1.yaw || 0);
-        if (show) drawTagLabel("Robot v2 (Left=Front)", p1.px, p1.py, true);
+        drawRobot(p1.px, p1.py, 10, COLORS.tag1, (t1.yaw || 0) - yawOffsetRef.current);
+        if (show) drawTagLabel("Robot UWB", p1.px, p1.py, true);
 
         // XY label (Tag1)
         if (show) {
@@ -1086,7 +1101,7 @@ export default function App() {
             <Divider />
             <Metric label="COORD Y" value={(pose.y_mm / 1000).toFixed(2)} unit="m" />
             <Divider />
-            <Metric label="HEADING" value={(pose.yaw || 0).toFixed(1)} unit="°" />
+            <Metric label="HEADING" value={((pose.yaw || 0) - yawOffset).toFixed(1)} unit="°" />
             <Divider />
             <Metric
               label="RMSE"
@@ -1159,6 +1174,16 @@ export default function App() {
                       style={{ height: 34, padding: "0 12px", borderRadius: 10 }}
                     >
                       CAL
+                    </button>
+
+                    <button
+                      onClick={calDirection}
+                      disabled={!connected}
+                      className="btn btnNeutral"
+                      style={{ height: 34, padding: "0 12px", borderRadius: 10 }}
+                      title="Set Current Direction as 0 (Front)"
+                    >
+                      CAL DIR
                     </button>
 
                     <button
