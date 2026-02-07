@@ -4,7 +4,7 @@
 #include <esp_now.h>
 #include <WiFi.h>
 
-// =================== GLOBAL VARIABLE DEFINITIONS ===================
+// =================== GLOBAL VARIABLE DEFINITIONS ==================+
 Preferences prefs;
 float bias[4] = { 0, 0, 0, 0 };
 

@@ -37,7 +37,7 @@ static constexpr float AY[4] = { 0.00f, 2.00f, 0.00f, 2.00f };
 static constexpr float MIN_RANGE_M = 0.10f;
 static constexpr float MAX_RANGE_M = 15.00f;
 
-// =================== FILTERING ===================
+// =================== FILTERING ===================+
 static constexpr int MED_N = 5;
 static constexpr float MAX_JUMP_M = 3.00f;
 

@@ -493,7 +493,7 @@ void loopUWB() {
     }
   }
 
-  // RMSE gate
+  // RMSE gate+
   const bool okBasic = (n >= 3) && okSolve;
   const bool acceptStrong = okBasic && (rmse <= RMSE_GATE_M);
   const bool acceptWeak   = okBasic && (rmse <= RMSE_HARD_M);

@@ -5,6 +5,6 @@
 
 void setupWeb();
 void loopWeb();
-IPAddress activeIP(); // Exposed so UWB can print the IP
+IPAddress activeIP(); // Exposed so UWB can print the IP+
 
 #endif

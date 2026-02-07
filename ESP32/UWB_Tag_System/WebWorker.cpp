@@ -29,7 +29,7 @@ static const IPAddress STA_FIX_SN(255, 255, 255, 0);   // Subnet Mask
 
 WebServer server(80);
 
-// =================== HTML DASHBOARD (CLEAN VERSION) ===================
+// =================== HTML DASHBOARD (CLEAN VERSION) ===================+
 static const char INDEX_HTML[] PROGMEM = R"HTML(
 <!doctype html>
 <html>
