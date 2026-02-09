@@ -14,7 +14,7 @@ export default defineConfig({
         target: "http://192.168.88.115",
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/robot/, ""),
-      },
+      },  
     },
   },
 });

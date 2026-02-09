@@ -202,6 +202,8 @@ const CMD_URL = `${CMD_BASE}/cmd`;
 // /cal /save /reset อยู่ฝั่ง POS (UWB) เป็นหลัก
 const api = (path) => `${POS_BASE}${path}`;
 
+// WebSocket URL สำหรับ Real-time UWB Data
+const WS_URL = "ws://192.168.88.99:81";
 
 const FIELD_W = 3000;
 const FIELD_H = 2000;
@@ -569,124 +571,113 @@ export default function App() {
   }, []);
 
 
-  /* --- Polling Data Loop (แก้ไขแล้ว) --- */
+  /* --- WebSocket for Real-time UWB Data --- */
   useEffect(() => {
-    // เพิ่มเป็น 100 (20 วินาที) เพื่อให้ขึ้น Online ค้างไว้นานที่สุดเท่าที่จะทำได้
-    const MAX_MISSED = 100;
+    let ws = null;
+    let reconnectTimeout = null;
+    const MAX_MISSED = 50; // ถ้าขาด 50 ครั้ง ถึงจะขึ้น DISCONNECTED
 
-    const fetchDataWithHeartbeat = async () => {
-      if (isFetchingRef.current) return;
-      isFetchingRef.current = true;
+    const connectWebSocket = () => {
+      if (ws && ws.readyState === WebSocket.OPEN) return;
 
-      try {
-        const fetchWithTimeout = (url, ms = 3000) =>
-          Promise.race([
-            fetch(url),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), ms))
-          ]);
+      ws = new WebSocket(WS_URL);
 
-        const res = await fetchWithTimeout(API_URL);
-        // ดึงมุมจาก STM32 (.115) 
-        const resStatus = await fetchWithTimeout(`${CMD_BASE}/status`);
-
-        if (!res.ok || !resStatus.ok) throw new Error("Network error");
-
-        const j = await res.json();
-        const jStatus = await resStatus.json(); // ข้อมูลจาก STM32
-
-        // ✅ เชื่อมต่อสำเร็จ -> รีเซ็ต counter เป็น 0 และ set Connected
+      ws.onopen = () => {
+        console.log("WebSocket connected to", WS_URL);
         missedHeartbeatsRef.current = 0;
         setConnected(true);
+      };
 
-        // ... Logic เดิม ...
-        const SWAP_XY = false;
-        const INVERT_X = false;
-        const INVERT_Y = false;
+      ws.onmessage = (event) => {
+        try {
+          const j = JSON.parse(event.data);
+          // Reset heartbeat counter on any message
+          missedHeartbeatsRef.current = 0;
+          setConnected(true);
 
-        const applyCal = (x_m, y_m) => {
-          let rawX = x_m * 1000;
-          let rawY = y_m * 1000;
-          let finalX = SWAP_XY ? rawY : rawX;
-          let finalY = SWAP_XY ? rawX : rawY;
-          if (INVERT_X) finalX = FIELD_W - finalX;
-          if (INVERT_Y) finalY = FIELD_H - finalY;
-          return { x_mm: finalX, y_mm: finalY };
-        };
+          // --- Parse UWB data ---
+          const xVal = Number(j.x);
+          const yVal = Number(j.y);
+          const tag1Ok = Number.isFinite(xVal) && Number.isFinite(yVal) && xVal !== -1 && yVal !== -1;
 
-        const xVal = Number(j.x);
-        const yVal = Number(j.y);
-        const angleVal = Number(jStatus.angle) || 0; // ดึงค่า angle มาใช้
+          if (tag1Ok) {
+            const xs = anchorsRef.current.map(a => a.x_mm);
+            const ys = anchorsRef.current.map(a => a.y_mm);
+            const minX = Math.min(...xs);
+            const maxX = Math.max(...xs);
+            const minY = Math.min(...ys);
+            const maxY = Math.max(...ys);
 
-        const tag1Ok = Number.isFinite(xVal) && Number.isFinite(yVal) && xVal !== -1 && yVal !== -1;
+            setPose(prev => ({
+              x_mm: clamp(xVal * 1000, minX, maxX),
+              y_mm: clamp(yVal * 1000, minY, maxY),
+              yaw: prev.yaw // รักษาค่า yaw จาก STM32 polling (ถ้ามี)
+            }));
+          }
 
-        if (tag1Ok) {
-          const p = applyCal(xVal, yVal);
+          // Anchor distances
+          if (j.a && Array.isArray(j.a)) {
+            const newRanges = {
+              A1: parseFloat(j.a[0]) || 0,
+              A2: parseFloat(j.a[1]) || 0,
+              A3: parseFloat(j.a[2]) || 0,
+              A4: parseFloat(j.a[3]) || 0,
+            };
+            rangesRef.current = newRanges;
+            setRanges(newRanges);
+          }
 
-          // ใช้ตำแหน่ง anchor จริง
-          const xs = anchorsRef.current.map(a => a.x_mm);
-          const ys = anchorsRef.current.map(a => a.y_mm);
+          // Calibration state
+          const cs = Number(j.cs);
+          if (Number.isFinite(cs)) setCalState(Math.max(0, Math.min(4, cs)));
 
-          const minX = Math.min(...xs);
-          const maxX = Math.max(...xs);
-          const minY = Math.min(...ys);
-          const maxY = Math.max(...ys);
+          // RMSE
+          const r = Number(j.rmse);
+          if (Number.isFinite(r)) setRmse(r); // Keep as number
 
-          setPose({
-            x_mm: clamp(p.x_mm, minX, maxX),
-            y_mm: clamp(p.y_mm, minY, maxY),
-            yaw: angleVal // เก็บค่ามุมเข้าไปใน state pose
-          });
+        } catch (err) {
+          console.error("WebSocket parse error:", err);
         }
+      };
 
-        if (j.a && Array.isArray(j.a)) {
-          const newRanges = {
-            A1: parseFloat(j.a[0]) || 0,
-            A2: parseFloat(j.a[1]) || 0,
-            A3: parseFloat(j.a[2]) || 0,
-            A4: parseFloat(j.a[3]) || 0,
-          };
-          rangesRef.current = newRanges;
-          setRanges(newRanges);
-        }
+      ws.onerror = (err) => {
+        console.error("WebSocket error:", err);
+      };
 
-        if (j.anch_xy && Array.isArray(j.anch_xy)) {
-          const newAnchors = j.anch_xy.map((p, i) => ({
-            id: `A${i + 1}`,
-            x_mm: p[0] * 1000,
-            y_mm: p[1] * 1000,
-          }));
-          if (newAnchors.length >= 3) setAnchors(newAnchors);
-        }
-
-        const r = Number(j.rmse);
-        if (Number.isFinite(r)) setRmse(r);
-
-        const cs = Number(j.cs);
-        if (Number.isFinite(cs)) setCalState(Math.max(0, Math.min(4, cs)));
-
-      } catch (err) {
-        // console.error("Poll Error:", err);
-        // ❌ พลาด 1 ครั้ง -> เพิ่ม counter
+      ws.onclose = () => {
+        console.log("WebSocket closed, reconnecting in 2s...");
         missedHeartbeatsRef.current += 1;
-
-        // ถ้าพลาดเกินกำหนด ถึงจะยอมแพ้และขึ้น Disconnected
         if (missedHeartbeatsRef.current >= MAX_MISSED) {
-          console.warn("Lost connection (max retries reached):", err);
           setConnected(false);
-        } else {
-          // console.log(`Skipped packet (${missedHeartbeatsRef.current}/${MAX_MISSED})`);
         }
-      } finally {
-        isFetchingRef.current = false;
+        reconnectTimeout = setTimeout(connectWebSocket, 2000);
+      };
+    };
+
+    connectWebSocket();
+
+    return () => {
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (ws) ws.close();
+    };
+  }, []);
+
+  /* --- Polling STM32 for Heading (angle) --- */
+  useEffect(() => {
+    const pollHeading = async () => {
+      try {
+        const res = await fetch(`${CMD_BASE}/status`);
+        if (!res.ok) return;
+        const jStatus = await res.json();
+        const angleVal = Number(jStatus.angle) || 0;
+        setPose(prev => ({ ...prev, yaw: angleVal }));
+      } catch (err) {
+        // Silently fail, WS handles connection status
       }
     };
 
-    // ✅ ปรับเป็น 200ms เพื่อความเสถียร
-    const intervalId = setInterval(fetchDataWithHeartbeat, 200);
-
-    return () => {
-      clearInterval(intervalId);
-    };
+    const intervalId = setInterval(pollHeading, 200);
+    return () => clearInterval(intervalId);
   }, []);
 
   /* --- Canvas Drawing (ลด glow/ความ neon ให้ดูคนทำ) --- */
@@ -1105,7 +1096,7 @@ export default function App() {
             <Divider />
             <Metric
               label="RMSE"
-              value={rmse == null ? "--" : `${(rmse * 100).toFixed(1)} cm (${rmse.toFixed(3)} m)`}
+              value={rmse == null ? "--" : `${(rmse * 100).toFixed(1)} cm`}
               unit=""
             />
           </div>
