@@ -185,26 +185,18 @@ input.cal-in[type=number]{
   `}</style>
 );
 /* ================== CONFIG ================== */
-// IP ตัวที่ "มีตำแหน่ง" (ต้องเปิดแล้วเจอ /json ได้)
-/* ================== CONFIG ================== */
-// IP ตัวที่ "มีตำแหน่ง" (192.168.88.53) -> Proxy: /pos
-const POS_BASE = "/pos";
+// IP ของ UWB Tag (จาก WebWorker.cpp: 192.168.88.99)
+const POS_BASE = "http://192.168.88.99";
 
-// IP ตัวที่ "รับคำสั่งคุมหุ่น" (192.168.88.115) -> Proxy: /robot
-const CMD_BASE = "/robot";
+// IP ของตัวรับคำสั่งหุ่น (STM32/ESP32 ที่ควบคุมมอเตอร์)
+const CMD_BASE = "http://192.168.88.115";
 
-// ดึงตำแหน่ง
 const API_URL = `${POS_BASE}/json`;
-
-// ส่งคำสั่งคุมหุ่น
 const CMD_URL = `${CMD_BASE}/cmd`;
-
-// /cal /save /reset อยู่ฝั่ง POS (UWB) เป็นหลัก
 const api = (path) => `${POS_BASE}${path}`;
 
-// WebSocket URL สำหรับ Real-time UWB Data
+// WebSocket URL (ตรงกับ WebWorker.cpp แล้ว)
 const WS_URL = "ws://192.168.88.99:81";
-
 const FIELD_W = 3000;
 const FIELD_H = 2000;
 
@@ -1096,8 +1088,8 @@ export default function App() {
             <Divider />
             <Metric
               label="RMSE"
-              value={rmse == null ? "--" : `${(rmse * 100).toFixed(1)} cm`}
-              unit=""
+              value={rmse === null ? "0.00" : rmse.toFixed(3)}
+              unit="m"
             />
           </div>
         </header>
