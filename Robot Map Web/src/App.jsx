@@ -241,10 +241,10 @@ export default function App() {
   const [scale, setScale] = useState(0.15);
 
   const [anchors, setAnchors] = useState([
-    { id: "A1", x_mm: 0, y_mm: 2000 },
-    { id: "A2", x_mm: 3000, y_mm: 2000 },
-    { id: "A3", x_mm: 0, y_mm: 0 },
-    { id: "A4", x_mm: 3000, y_mm: 0 },
+    { id: "A1", x_mm: 0, y_mm: 0 },
+    { id: "A2", x_mm: 0, y_mm: 2000 },
+    { id: "A3", x_mm: 3000, y_mm: 0 },
+    { id: "A4", x_mm: 3000, y_mm: 2000 },
   ]);
 
   const [ranges, setRanges] = useState({ A1: 0, A2: 0, A3: 0, A4: 0 });
@@ -626,6 +626,16 @@ export default function App() {
           // RMSE
           const r = Number(j.rmse);
           if (Number.isFinite(r)) setRmse(r); // Keep as number
+
+          // Anchor positions (anch_xy) from ESP32
+          if (j.anch_xy && Array.isArray(j.anch_xy)) {
+            const newAnchors = j.anch_xy.map((p, i) => ({
+              id: `A${i + 1}`,
+              x_mm: p[0] * 1000,
+              y_mm: p[1] * 1000,
+            }));
+            if (newAnchors.length >= 3) setAnchors(newAnchors);
+          }
 
         } catch (err) {
           console.error("WebSocket parse error:", err);
