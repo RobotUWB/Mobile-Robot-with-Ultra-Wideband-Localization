@@ -185,18 +185,16 @@ input.cal-in[type=number]{
   `}</style>
 );
 /* ================== CONFIG ================== */
-// IP ของ UWB Tag (จาก WebWorker.cpp: 192.168.88.99)
-const POS_BASE = "http://192.168.88.99";
+// UWB Tag (192.168.88.99) -> Proxy: /pos
+const POS_BASE = "/pos";
 
-// IP ของตัวรับคำสั่งหุ่น (STM32/ESP32 ที่ควบคุมมอเตอร์)
-const CMD_BASE = "http://192.168.88.115";
+// Robot Controller STM32 (192.168.88.115) -> Proxy: /robot
+const CMD_BASE = "/robot";
 
 const API_URL = `${POS_BASE}/json`;
 const CMD_URL = `${CMD_BASE}/cmd`;
 const api = (path) => `${POS_BASE}${path}`;
 
-// WebSocket URL (ตรงกับ WebWorker.cpp แล้ว)
-const WS_URL = "ws://192.168.88.99:81";
 const FIELD_W = 3000;
 const FIELD_H = 2000;
 
@@ -563,109 +561,74 @@ export default function App() {
   }, []);
 
 
-  /* --- WebSocket for Real-time UWB Data --- */
+  /* --- HTTP Polling for UWB Data + Heading --- */
   useEffect(() => {
-    let ws = null;
-    let reconnectTimeout = null;
-    const MAX_MISSED = 50; // ถ้าขาด 50 ครั้ง ถึงจะขึ้น DISCONNECTED
+    const pollData = async () => {
+      try {
+        // --- Fetch UWB data from ESP32 (192.168.88.99) ---
+        const res = await fetch(API_URL);
+        if (!res.ok) throw new Error(`UWB fetch failed: ${res.status}`);
+        const j = await res.json();
 
-    const connectWebSocket = () => {
-      if (ws && ws.readyState === WebSocket.OPEN) return;
-
-      ws = new WebSocket(WS_URL);
-
-      ws.onopen = () => {
-        console.log("WebSocket connected to", WS_URL);
         missedHeartbeatsRef.current = 0;
         setConnected(true);
-      };
 
-      ws.onmessage = (event) => {
-        try {
-          const j = JSON.parse(event.data);
-          // Reset heartbeat counter on any message
-          missedHeartbeatsRef.current = 0;
-          setConnected(true);
+        // Position
+        const xVal = Number(j.x);
+        const yVal = Number(j.y);
+        const tag1Ok = Number.isFinite(xVal) && Number.isFinite(yVal) && xVal !== -1 && yVal !== -1;
 
-          // --- Parse UWB data ---
-          const xVal = Number(j.x);
-          const yVal = Number(j.y);
-          const tag1Ok = Number.isFinite(xVal) && Number.isFinite(yVal) && xVal !== -1 && yVal !== -1;
+        if (tag1Ok) {
+          const xs = anchorsRef.current.map(a => a.x_mm);
+          const ys = anchorsRef.current.map(a => a.y_mm);
+          const minX = Math.min(...xs);
+          const maxX = Math.max(...xs);
+          const minY = Math.min(...ys);
+          const maxY = Math.max(...ys);
 
-          if (tag1Ok) {
-            const xs = anchorsRef.current.map(a => a.x_mm);
-            const ys = anchorsRef.current.map(a => a.y_mm);
-            const minX = Math.min(...xs);
-            const maxX = Math.max(...xs);
-            const minY = Math.min(...ys);
-            const maxY = Math.max(...ys);
-
-            setPose(prev => ({
-              x_mm: clamp(xVal * 1000, minX, maxX),
-              y_mm: clamp(yVal * 1000, minY, maxY),
-              yaw: prev.yaw // รักษาค่า yaw จาก STM32 polling (ถ้ามี)
-            }));
-          }
-
-          // Anchor distances
-          if (j.a && Array.isArray(j.a)) {
-            const newRanges = {
-              A1: parseFloat(j.a[0]) || 0,
-              A2: parseFloat(j.a[1]) || 0,
-              A3: parseFloat(j.a[2]) || 0,
-              A4: parseFloat(j.a[3]) || 0,
-            };
-            rangesRef.current = newRanges;
-            setRanges(newRanges);
-          }
-
-          // Calibration state
-          const cs = Number(j.cs);
-          if (Number.isFinite(cs)) setCalState(Math.max(0, Math.min(4, cs)));
-
-          // RMSE
-          const r = Number(j.rmse);
-          if (Number.isFinite(r)) setRmse(r); // Keep as number
-
-          // Anchor positions (anch_xy) from ESP32
-          if (j.anch_xy && Array.isArray(j.anch_xy)) {
-            const newAnchors = j.anch_xy.map((p, i) => ({
-              id: `A${i + 1}`,
-              x_mm: p[0] * 1000,
-              y_mm: p[1] * 1000,
-            }));
-            if (newAnchors.length >= 3) setAnchors(newAnchors);
-          }
-
-        } catch (err) {
-          console.error("WebSocket parse error:", err);
+          setPose(prev => ({
+            x_mm: clamp(xVal * 1000, minX, maxX),
+            y_mm: clamp(yVal * 1000, minY, maxY),
+            yaw: prev.yaw
+          }));
         }
-      };
 
-      ws.onerror = (err) => {
-        console.error("WebSocket error:", err);
-      };
+        // Anchor distances
+        if (j.a && Array.isArray(j.a)) {
+          const newRanges = {
+            A1: parseFloat(j.a[0]) || 0,
+            A2: parseFloat(j.a[1]) || 0,
+            A3: parseFloat(j.a[2]) || 0,
+            A4: parseFloat(j.a[3]) || 0,
+          };
+          rangesRef.current = newRanges;
+          setRanges(newRanges);
+        }
 
-      ws.onclose = () => {
-        console.log("WebSocket closed, reconnecting in 2s...");
+        // Calibration state
+        const cs = Number(j.cs);
+        if (Number.isFinite(cs)) setCalState(Math.max(0, Math.min(4, cs)));
+
+        // RMSE
+        const r = Number(j.rmse);
+        if (Number.isFinite(r)) setRmse(r);
+
+        // Anchor positions (anch_xy) from ESP32
+        if (j.anch_xy && Array.isArray(j.anch_xy)) {
+          const newAnchors = j.anch_xy.map((p, i) => ({
+            id: `A${i + 1}`,
+            x_mm: p[0] * 1000,
+            y_mm: p[1] * 1000,
+          }));
+          if (newAnchors.length >= 3) setAnchors(newAnchors);
+        }
+
+      } catch (err) {
         missedHeartbeatsRef.current += 1;
-        if (missedHeartbeatsRef.current >= MAX_MISSED) {
-          setConnected(false);
-        }
-        reconnectTimeout = setTimeout(connectWebSocket, 2000);
-      };
+        if (missedHeartbeatsRef.current >= 10) setConnected(false);
+      }
     };
 
-    connectWebSocket();
-
-    return () => {
-      if (reconnectTimeout) clearTimeout(reconnectTimeout);
-      if (ws) ws.close();
-    };
-  }, []);
-
-  /* --- Polling STM32 for Heading (angle) --- */
-  useEffect(() => {
     const pollHeading = async () => {
       try {
         const res = await fetch(`${CMD_BASE}/status`);
@@ -674,12 +637,22 @@ export default function App() {
         const angleVal = Number(jStatus.angle) || 0;
         setPose(prev => ({ ...prev, yaw: angleVal }));
       } catch (err) {
-        // Silently fail, WS handles connection status
+        // Silently fail
       }
     };
 
-    const intervalId = setInterval(pollHeading, 200);
-    return () => clearInterval(intervalId);
+    // Poll UWB data every 200ms, heading every 200ms
+    const dataInterval = setInterval(pollData, 200);
+    const headingInterval = setInterval(pollHeading, 200);
+
+    // Initial fetch
+    pollData();
+    pollHeading();
+
+    return () => {
+      clearInterval(dataInterval);
+      clearInterval(headingInterval);
+    };
   }, []);
 
   /* --- Canvas Drawing (ลด glow/ความ neon ให้ดูคนทำ) --- */
