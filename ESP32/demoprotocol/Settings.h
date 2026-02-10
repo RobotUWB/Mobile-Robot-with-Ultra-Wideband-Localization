@@ -18,7 +18,7 @@ const IPAddress primaryDNS(8, 8, 8, 8);
 #define TX_PIN 17
 
 // --- System Settings ---
-#define OTA_HOSTNAME "CyberBot-Clean"
+#define OTA_HOSTNAME "Sorting"
 #define RECONNECT_INTERVAL 30000 // 30 วินาที
 
 #endif
