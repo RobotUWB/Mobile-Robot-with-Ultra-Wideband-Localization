@@ -198,6 +198,10 @@ const api = (path) => `${POS_BASE}${path}`;
 const FIELD_W = 3000;
 const FIELD_H = 2000;
 
+// WebSocket Control (192.168.88.115:81)
+const CMD_WS_URL = "ws://192.168.88.115:81";
+const WS_MAX_MISSED = 20;
+
 const ZOOM_MIN = 0.05,
   ZOOM_MAX = 0.4,
   ZOOM_STEP = 0.01;
@@ -246,6 +250,10 @@ export default function App() {
   ]);
 
   const [ranges, setRanges] = useState({ A1: 0, A2: 0, A3: 0, A4: 0 });
+
+  // WebSocket for Control
+  const wsCmdRef = useRef(null);
+  const [wsConnected, setWsConnected] = useState(false);
 
   // Tag1
   const [pose, setPose] = useState({ x_mm: 0, y_mm: 0, yaw: 0 });
@@ -401,13 +409,37 @@ export default function App() {
     const arr = pressedOrderRef.current;
     return arr.length ? arr[arr.length - 1] : null;
   };
+  // Function to send drive command (WebSocket Preferred, fallback to HTTP)
+  const sendDriveCmd = async (cmdVal) => {
+    // 1. WebSocket (Text Mode)
+    if (wsCmdRef.current && wsCmdRef.current.readyState === WebSocket.OPEN) {
+      wsCmdRef.current.send(cmdVal);
+      return;
+    }
+
+    // 2. HTTP Fallback
+    try {
+      if (cmdVal === "STOP") {
+        await fetch(`${CMD_BASE}/action?type=STOP`);
+      } else {
+        await fetch(CMD_URL, {
+          method: "POST", // ESP32 might still expect POST/GET, but API says Text via WS
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `cmd=${cmdVal}`,
+        });
+      }
+    } catch (err) {
+      console.error("Cmd Error:", err);
+    }
+  };
+
   const applyManualDrive = async () => {
     // ถ้าถูก Pause อยู่ (จาก UI) ไม่สั่งเดินซ้ำ
     if (isPausedRef2.current) return;
 
     // ✅ ถ้ากำลังกด STOP ค้างอยู่ ให้สั่ง STOP ตลอด และไม่ล้างปุ่มที่ค้าง
     if (stopHeldRef.current) {
-      sendCmd({ cmd: DRIVE_STOP_CMD });
+      sendDriveCmd(DRIVE_STOP_CMD);
       return;
     }
 
@@ -415,21 +447,21 @@ export default function App() {
     setDriveKey(k);
 
     if (k) {
-      sendCmd({ cmd: DRIVE_CMDS[k] });
+      sendDriveCmd(DRIVE_CMDS[k]);
     } else {
-      sendCmd({ cmd: DRIVE_STOP_CMD });
+      sendDriveCmd(DRIVE_STOP_CMD);
     }
   };
 
   const rotatePress = async (k) => {
     if (isPausedRef2.current) return;
     setRotKey(k);
-    await sendCmd({ cmd: ROT_CMDS[k] });
+    await sendDriveCmd(ROT_CMDS[k]);
   };
 
   const rotateRelease = async () => {
     setRotKey(null);
-    await sendCmd({ cmd: DRIVE_STOP_CMD }); // ปล่อยแล้วหยุดหมุน
+    await sendDriveCmd(DRIVE_STOP_CMD); // ปล่อยแล้วหยุดหมุน
   };
 
   const manualPress = async (kRaw) => {
@@ -629,29 +661,62 @@ export default function App() {
       }
     };
 
-    const pollHeading = async () => {
-      try {
-        const res = await fetch(`${CMD_BASE}/status`);
-        if (!res.ok) return;
-        const jStatus = await res.json();
-        const angleVal = Number(jStatus.angle) || 0;
-        setPose(prev => ({ ...prev, yaw: angleVal }));
-      } catch (err) {
-        // Silently fail
-      }
-    };
-
-    // Poll UWB data every 200ms, heading every 200ms
+    // Poll UWB data every 200ms
     const dataInterval = setInterval(pollData, 200);
-    const headingInterval = setInterval(pollHeading, 200);
-
-    // Initial fetch
     pollData();
-    pollHeading();
 
     return () => {
       clearInterval(dataInterval);
-      clearInterval(headingInterval);
+    };
+  }, []);
+
+  /* --- WebSocket for Robot Control (Heading + Commands) --- */
+  useEffect(() => {
+    let reconnectTimeout = null;
+
+    const connectWsCmd = () => {
+      if (wsCmdRef.current && wsCmdRef.current.readyState === WebSocket.OPEN) return;
+
+      console.log("WS-CMD: Connecting to", CMD_WS_URL);
+      const ws = new WebSocket(CMD_WS_URL);
+      wsCmdRef.current = ws;
+
+      ws.onopen = () => {
+        console.log("WS-CMD: Connected");
+        setWsConnected(true);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const j = JSON.parse(event.data);
+          // Expect format: {"angle": 45.5}
+          const angle = Number(j.angle);
+          if (Number.isFinite(angle)) {
+            setPose(prev => ({ ...prev, yaw: angle }));
+          }
+        } catch (e) {
+          console.error("WS-CMD parse error:", e);
+        }
+      };
+
+      ws.onclose = () => {
+        console.log("WS-CMD: Closed, reconnecting...");
+        setWsConnected(false);
+        wsCmdRef.current = null;
+        reconnectTimeout = setTimeout(connectWsCmd, 2000);
+      };
+
+      ws.onerror = (e) => {
+        console.error("WS-CMD Error:", e);
+        ws.close();
+      };
+    };
+
+    connectWsCmd();
+
+    return () => {
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (wsCmdRef.current) wsCmdRef.current.close();
     };
   }, []);
 
