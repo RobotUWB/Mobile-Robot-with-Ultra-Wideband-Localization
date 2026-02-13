@@ -540,7 +540,8 @@ export default function App() {
 
       const r = codeToRotateKey(e.code);
       if (r) {
-        if (e.repeat) return;
+        // ✅ Allow repeated KeyDown for rotation too
+        // if (e.repeat) return; 
         e.preventDefault();
         rotatePress(r);
         return;
@@ -548,7 +549,8 @@ export default function App() {
 
       const k = codeToMoveKey(e.code);
       if (k) {
-        if (e.repeat) return;
+        // ✅ Allow repeated KeyDown to send multiple commands
+        // if (e.repeat) return;
         e.preventDefault();
         manualPress(k);
       }
