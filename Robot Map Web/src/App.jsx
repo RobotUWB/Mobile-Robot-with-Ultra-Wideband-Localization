@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 
 /* ================== ICONS ================== */
+const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
 const Icons = {
   Play: () => (
     <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -183,26 +185,22 @@ input.cal-in[type=number]{
   `}</style>
 );
 /* ================== CONFIG ================== */
-// IP ตัวที่ "มีตำแหน่ง" (ต้องเปิดแล้วเจอ /json ได้)
-/* ================== CONFIG ================== */
-// IP ตัวที่ "มีตำแหน่ง" (192.168.88.53) -> Proxy: /pos
+// UWB Tag (192.168.88.99) -> Proxy: /pos
 const POS_BASE = "/pos";
 
-// IP ตัวที่ "รับคำสั่งคุมหุ่น" (192.168.88.115) -> Proxy: /robot
+// Robot Controller STM32 (192.168.88.115) -> Proxy: /robot
 const CMD_BASE = "/robot";
 
-// ดึงตำแหน่ง
 const API_URL = `${POS_BASE}/json`;
-
-// ส่งคำสั่งคุมหุ่น
 const CMD_URL = `${CMD_BASE}/cmd`;
-
-// /cal /save /reset อยู่ฝั่ง POS (UWB) เป็นหลัก
 const api = (path) => `${POS_BASE}${path}`;
-
 
 const FIELD_W = 3000;
 const FIELD_H = 2000;
+
+// WebSocket Control (192.168.88.115:81)
+const CMD_WS_URL = "ws://192.168.88.115:81";
+const WS_MAX_MISSED = 20;
 
 const ZOOM_MIN = 0.05,
   ZOOM_MAX = 0.4,
@@ -216,6 +214,10 @@ const DRIVE_CMDS = {
   A: "LEFT",
   S: "BWD",
   D: "RIGHT",
+};
+const ROT_CMDS = {
+  Q: "ROTL",
+  E: "ROTR",
 };
 
 // หยุดตอนปล่อยปุ่มเดิน (หรือไม่มีปุ่มค้าง)
@@ -241,16 +243,23 @@ export default function App() {
   const [scale, setScale] = useState(0.15);
 
   const [anchors, setAnchors] = useState([
-    { id: "A1", x_mm: 0, y_mm: 2000 },
-    { id: "A2", x_mm: 3000, y_mm: 2000 },
-    { id: "A3", x_mm: 0, y_mm: 0 },
-    { id: "A4", x_mm: 3000, y_mm: 0 },
+    { id: "A1", x_mm: 0, y_mm: 0 },
+    { id: "A2", x_mm: 0, y_mm: 2000 },
+    { id: "A3", x_mm: 3000, y_mm: 0 },
+    { id: "A4", x_mm: 3000, y_mm: 2000 },
   ]);
 
   const [ranges, setRanges] = useState({ A1: 0, A2: 0, A3: 0, A4: 0 });
 
+  // WebSocket for Control
+  const wsCmdRef = useRef(null);
+  const [wsConnected, setWsConnected] = useState(false);
+
   // Tag1
-  const [pose, setPose] = useState({ x_mm: 0, y_mm: 0 });
+  const [pose, setPose] = useState({ x_mm: 0, y_mm: 0, yaw: 0 });
+  const [yawOffset, setYawOffset] = useState(() => {
+    return parseFloat(localStorage.getItem("uwb_yaw_offset") || "0");
+  });
   // RMSE (ถ้ามีใน json)
   const [rmse, setRmse] = useState(null);
 
@@ -260,12 +269,7 @@ export default function App() {
   const [showTags, setShowTags] = useState(true);
   const [toast, setToast] = useState({ show: false, msg: "", type: "info" });
 
-  /* --- State: Database & Recording --- */
-  const [dbPositions, setDbPositions] = useState([]); // ✅ เก็บข้อมูลจาก Database
-  const [isAutoRecording, setIsAutoRecording] = useState(false); // ✅ สถานะ Auto Record
-
   /* --- Refs for Animation Loop --- */
-  const lastSaveRef = useRef(0); // ✅ สำหรับ Auto Record logic
   const scaleRef = useRef(scale);
   const poseRef = useRef(pose);
   const anchorsRef = useRef(anchors);
@@ -273,6 +277,7 @@ export default function App() {
   const missedHeartbeatsRef = useRef(0); // ✅ Heartbeat Counter
   const showTagsRef = useRef(showTags);
   const rangesRef = useRef(ranges);
+  const yawOffsetRef = useRef(0);
   const mouseRef = useRef({ x: 0, y: 0, active: false }); // ✅ Mouse tracking
 
   useEffect(() => {
@@ -290,6 +295,10 @@ export default function App() {
   useEffect(() => {
     poseRef.current = pose;
   }, [pose]);
+  useEffect(() => {
+    yawOffsetRef.current = yawOffset;
+    localStorage.setItem("uwb_yaw_offset", yawOffset.toString());
+  }, [yawOffset]);
 
   /* --- Helper: Toast --- */
   const showToast = (msg, type = "info") => {
@@ -360,11 +369,19 @@ export default function App() {
     }
   };
 
+  const calDirection = () => {
+    // เซ็ตให้มุมปัจจุบันของหุ่น กลายเป็น 0 (หันซ้าย)
+    const currentYaw = poseRef.current.yaw || 0;
+    setYawOffset(currentYaw);
+    showToast("CAL DIRECTION OK", "success");
+  };
+
   /* ================== MANUAL DRIVE LOGIC ================== */
   const [driveKey, setDriveKey] = useState(null); // "W"/"A"/"S"/"D"/null
+  const [rotKey, setRotKey] = useState(null); // "Q" | "E" | null
   const pressedOrderRef = useRef([]); // เก็บลำดับปุ่มที่ค้าง (อันล่าสุดมี priority)
-  const spaceHeldRef = useRef(false);
-  const wasPausedBeforeSpaceRef = useRef(false);
+  const [stopHeld, setStopHeld] = useState(false);
+  const stopHeldRef = useRef(false);
 
   const connectedRef2 = useRef(connected);
   const isPausedRef2 = useRef(isPaused);
@@ -392,24 +409,59 @@ export default function App() {
     const arr = pressedOrderRef.current;
     return arr.length ? arr[arr.length - 1] : null;
   };
+  // Function to send drive command (WebSocket Preferred, fallback to HTTP)
+  const sendDriveCmd = async (cmdVal) => {
+    // 1. WebSocket (Text Mode)
+    if (wsCmdRef.current && wsCmdRef.current.readyState === WebSocket.OPEN) {
+      wsCmdRef.current.send(cmdVal);
+      return;
+    }
+
+    // 2. HTTP Fallback
+    try {
+      if (cmdVal === "STOP") {
+        await fetch(`${CMD_BASE}/action?type=STOP`);
+      } else {
+        await fetch(CMD_URL, {
+          method: "POST", // ESP32 might still expect POST/GET, but API says Text via WS
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `cmd=${cmdVal}`,
+        });
+      }
+    } catch (err) {
+      console.error("Cmd Error:", err);
+    }
+  };
 
   const applyManualDrive = async () => {
-    // if (!connectedRef2.current) return; // ✅ Allow drive even if 'Disconnected' (Pos)
-
-    // ถ้ากำลังกด Space อยู่ -> ให้หยุด override ไว้ก่อน
-    if (spaceHeldRef.current) return;
-
     // ถ้าถูก Pause อยู่ (จาก UI) ไม่สั่งเดินซ้ำ
     if (isPausedRef2.current) return;
+
+    // ✅ ถ้ากำลังกด STOP ค้างอยู่ ให้สั่ง STOP ตลอด และไม่ล้างปุ่มที่ค้าง
+    if (stopHeldRef.current) {
+      sendDriveCmd(DRIVE_STOP_CMD);
+      return;
+    }
 
     const k = computeActiveMoveKey();
     setDriveKey(k);
 
     if (k) {
-      sendCmd({ cmd: DRIVE_CMDS[k] }); // 🔥 No await (fire and forget)
+      sendDriveCmd(DRIVE_CMDS[k]);
     } else {
-      sendCmd({ cmd: DRIVE_STOP_CMD });
+      sendDriveCmd(DRIVE_STOP_CMD);
     }
+  };
+
+  const rotatePress = async (k) => {
+    if (isPausedRef2.current) return;
+    setRotKey(k);
+    await sendDriveCmd(ROT_CMDS[k]);
+  };
+
+  const rotateRelease = async () => {
+    setRotKey(null);
+    await sendDriveCmd(DRIVE_STOP_CMD); // ปล่อยแล้วหยุดหมุน
   };
 
   const manualPress = async (kRaw) => {
@@ -428,39 +480,45 @@ export default function App() {
     pressedOrderRef.current = pressedOrderRef.current.filter((x) => x !== k);
     await applyManualDrive();
   };
-
   const manualReleaseAll = async () => {
     pressedOrderRef.current = [];
     setDriveKey(null);
 
-    // if (!connectedRef2.current) return; // ✅ Allow safe stop on blur
+    // ✅ เคลียร์ stop hold ด้วย
+    stopHeldRef.current = false;
+    setStopHeld(false);
 
-    // ปลอดภัย: หลุดโฟกัสแล้วสั่งหยุด
-    if (!spaceHeldRef.current) {
-      await sendCmd({ cmd: DRIVE_STOP_CMD });
-    }
-  };
-  const spaceDown = async () => {
-    // if (!connectedRef2.current) return;
-    if (spaceHeldRef.current) return;
-
-    spaceHeldRef.current = true;
-
-    // HOLD = STOP ครั้งเดียว
-    await sendCmd({ cmd: "STOP" });
+    await sendCmd({ cmd: DRIVE_STOP_CMD });
   };
 
-  const spaceUp = async () => {
-    // if (!connectedRef2.current) return;
-    if (!spaceHeldRef.current) return;
-
-    spaceHeldRef.current = false;
-
-    // ปล่อยแล้ว ถ้ายังค้าง WASD -> เดินต่อ
-    await applyManualDrive();
+  const stopHoldPress = () => {
+    // ✅ ไม่ล้าง pressedOrderRef เพื่อให้ปล่อย STOP แล้วกลับไปวิ่งต่อ
+    stopHeldRef.current = true;
+    setStopHeld(true);
+    sendCmd({ cmd: DRIVE_STOP_CMD });
   };
 
-  // ✅ Keyboard listeners: WASD + Spacebar (ใช้ e.code รองรับคีย์บอร์ดไทย/eng)
+  const stopHoldRelease = async () => {
+    stopHeldRef.current = false;
+    setStopHeld(false);
+    await applyManualDrive(); // ✅ ปล่อย STOP แล้วกลับไปตามปุ่มที่ค้างอยู่
+  };
+
+  const stopNow = async () => {
+    // หยุดแบบ “ตัดคำสั่งเดิน” ไม่ให้กลับไปวิ่งเอง
+    pressedOrderRef.current = [];
+    setDriveKey(null);
+
+    await sendCmd({ cmd: "STOP" }); // ✅ ส่ง {"cmd":"STOP"}
+    // จะโชว์ toast ก็ได้
+    // showToast("STOP", "success");
+  };
+  const codeToRotateKey = (code) => {
+    if (code === "KeyQ") return "Q";
+    if (code === "KeyE") return "E";
+    return null;
+  };
+
   useEffect(() => {
     const codeToMoveKey = (code) => {
       if (code === "KeyW") return "W";
@@ -473,10 +531,18 @@ export default function App() {
     const onKeyDown = (e) => {
       if (isTypingTarget(e.target)) return;
 
-      // Spacebar
       if (e.code === "Space") {
+        if (e.repeat) return;
         e.preventDefault();
-        spaceDown();
+        stopHoldPress();
+        return;
+      }
+
+      const r = codeToRotateKey(e.code);
+      if (r) {
+        if (e.repeat) return;
+        e.preventDefault();
+        rotatePress(r);
         return;
       }
 
@@ -484,7 +550,7 @@ export default function App() {
       if (k) {
         if (e.repeat) return;
         e.preventDefault();
-        manualPress(k); // ส่ง "W"/"A"/"S"/"D"
+        manualPress(k);
       }
     };
 
@@ -493,7 +559,14 @@ export default function App() {
 
       if (e.code === "Space") {
         e.preventDefault();
-        spaceUp();
+        stopHoldRelease();
+        return;
+      }
+
+      const r = codeToRotateKey(e.code);
+      if (r) {
+        e.preventDefault();
+        rotateRelease();
         return;
       }
 
@@ -506,7 +579,6 @@ export default function App() {
 
     const onBlur = () => {
       manualReleaseAll();
-      spaceHeldRef.current = false;
     };
 
     window.addEventListener("keydown", onKeyDown, { passive: false });
@@ -518,55 +590,42 @@ export default function App() {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* --- Polling Data Loop (แก้ไขแล้ว) --- */
+
+  /* --- HTTP Polling for UWB Data + Heading --- */
   useEffect(() => {
-    // เพิ่มเป็น 100 (20 วินาที) เพื่อให้ขึ้น Online ค้างไว้นานที่สุดเท่าที่จะทำได้
-    const MAX_MISSED = 100;
-
-    const fetchDataWithHeartbeat = async () => {
-      if (isFetchingRef.current) return;
-      isFetchingRef.current = true;
-
+    const pollData = async () => {
       try {
-        const fetchWithTimeout = (url, ms = 3000) =>
-          Promise.race([
-            fetch(url),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), ms))
-          ]);
-
-        const res = await fetchWithTimeout(API_URL);
-
-        if (!res.ok) throw new Error("Network error");
+        // --- Fetch UWB data from ESP32 (192.168.88.99) ---
+        const res = await fetch(API_URL);
+        if (!res.ok) throw new Error(`UWB fetch failed: ${res.status}`);
         const j = await res.json();
 
-        // ✅ เชื่อมต่อสำเร็จ -> รีเซ็ต counter เป็น 0 และ set Connected
         missedHeartbeatsRef.current = 0;
         setConnected(true);
 
-        // ... Logic เดิม ...
-        const SWAP_XY = false;
-        const INVERT_X = false;
-        const INVERT_Y = false;
-
-        const applyCal = (x_m, y_m) => {
-          let rawX = x_m * 1000;
-          let rawY = y_m * 1000;
-          let finalX = SWAP_XY ? rawY : rawX;
-          let finalY = SWAP_XY ? rawX : rawY;
-          if (INVERT_X) finalX = FIELD_W - finalX;
-          if (INVERT_Y) finalY = FIELD_H - finalY;
-          return { x_mm: finalX, y_mm: finalY };
-        };
-
+        // Position
         const xVal = Number(j.x);
         const yVal = Number(j.y);
         const tag1Ok = Number.isFinite(xVal) && Number.isFinite(yVal) && xVal !== -1 && yVal !== -1;
 
-        if (tag1Ok) setPose(applyCal(xVal, yVal));
+        if (tag1Ok) {
+          const xs = anchorsRef.current.map(a => a.x_mm);
+          const ys = anchorsRef.current.map(a => a.y_mm);
+          const minX = Math.min(...xs);
+          const maxX = Math.max(...xs);
+          const minY = Math.min(...ys);
+          const maxY = Math.max(...ys);
 
+          setPose(prev => ({
+            x_mm: clamp(xVal * 1000, minX, maxX),
+            y_mm: clamp(yVal * 1000, minY, maxY),
+            yaw: prev.yaw
+          }));
+        }
+
+        // Anchor distances
         if (j.a && Array.isArray(j.a)) {
           const newRanges = {
             A1: parseFloat(j.a[0]) || 0,
@@ -578,6 +637,15 @@ export default function App() {
           setRanges(newRanges);
         }
 
+        // Calibration state
+        const cs = Number(j.cs);
+        if (Number.isFinite(cs)) setCalState(Math.max(0, Math.min(4, cs)));
+
+        // RMSE
+        const r = Number(j.rmse);
+        if (Number.isFinite(r)) setRmse(r);
+
+        // Anchor positions (anch_xy) from ESP32
         if (j.anch_xy && Array.isArray(j.anch_xy)) {
           const newAnchors = j.anch_xy.map((p, i) => ({
             id: `A${i + 1}`,
@@ -587,64 +655,70 @@ export default function App() {
           if (newAnchors.length >= 3) setAnchors(newAnchors);
         }
 
-        const r = Number(j.rmse);
-        if (Number.isFinite(r)) setRmse(r);
-
-        const cs = Number(j.cs);
-        if (Number.isFinite(cs)) setCalState(Math.max(0, Math.min(4, cs)));
-
       } catch (err) {
-        // ❌ พลาด 1 ครั้ง -> เพิ่ม counter
         missedHeartbeatsRef.current += 1;
-
-        // ถ้าพลาดเกินกำหนด ถึงจะยอมแพ้และขึ้น Disconnected
-        if (missedHeartbeatsRef.current >= MAX_MISSED) {
-          console.warn("Lost connection (max retries reached):", err);
-          setConnected(false);
-        } else {
-          // console.log(`Skipped packet (${missedHeartbeatsRef.current}/${MAX_MISSED})`);
-        }
-      } finally {
-        isFetchingRef.current = false;
+        if (missedHeartbeatsRef.current >= 10) setConnected(false);
       }
     };
 
-    // ✅ ปรับเป็น 200ms เพื่อความเสถียร
-    const intervalId = setInterval(fetchDataWithHeartbeat, 200);
+    // Poll UWB data every 200ms
+    const dataInterval = setInterval(pollData, 200);
+    pollData();
 
     return () => {
-      clearInterval(intervalId);
+      clearInterval(dataInterval);
     };
   }, []);
 
-  // ✅ แยก Auto Record Interval ออกมา
+  /* --- WebSocket for Robot Control (Heading + Commands) --- */
   useEffect(() => {
-    const autoSaveInterval = setInterval(() => {
-      if (!isAutoRecording) return;
+    let reconnectTimeout = null;
 
-      const now = Date.now();
-      if (now - lastSaveRef.current < 1000) return; // บันทึกทุก 1 วิ
+    const connectWsCmd = () => {
+      if (wsCmdRef.current && wsCmdRef.current.readyState === WebSocket.OPEN) return;
 
-      const currentPose = poseRef.current;
-      if (currentPose.x_mm !== 0 || currentPose.y_mm !== 0) {
-        const payload = {
-          x: Number((currentPose.x_mm / 1000).toFixed(2)),
-          y: Number((currentPose.y_mm / 1000).toFixed(2)),
-          name: "AUTO"
-        };
+      console.log("WS-CMD: Connecting to", CMD_WS_URL);
+      const ws = new WebSocket(CMD_WS_URL);
+      wsCmdRef.current = ws;
 
-        fetch("http://localhost:8000/positions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        }).then(() => {
-          lastSaveRef.current = now;
-        }).catch(e => console.error("Auto save failed", e));
-      }
-    }, 1000);
+      ws.onopen = () => {
+        console.log("WS-CMD: Connected");
+        setWsConnected(true);
+      };
 
-    return () => clearInterval(autoSaveInterval);
-  }, [isAutoRecording]);
+      ws.onmessage = (event) => {
+        try {
+          const j = JSON.parse(event.data);
+          // Expect format: {"angle": 45.5}
+          const angle = Number(j.angle);
+          if (Number.isFinite(angle)) {
+            setPose(prev => ({ ...prev, yaw: angle }));
+          }
+        } catch (e) {
+          console.error("WS-CMD parse error:", e);
+        }
+      };
+
+      ws.onclose = () => {
+        console.log("WS-CMD: Closed, reconnecting...");
+        setWsConnected(false);
+        wsCmdRef.current = null;
+        reconnectTimeout = setTimeout(connectWsCmd, 2000);
+      };
+
+      ws.onerror = (e) => {
+        console.error("WS-CMD Error:", e);
+        ws.close();
+      };
+    };
+
+    connectWsCmd();
+
+    return () => {
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (wsCmdRef.current) wsCmdRef.current.close();
+    };
+  }, []);
 
   /* --- Canvas Drawing (ลด glow/ความ neon ให้ดูคนทำ) --- */
   useEffect(() => {
@@ -698,6 +772,26 @@ export default function App() {
         px: cx + mmToPx(x_mm - midX, s),
         py: cy + mmToPx(midY - y_mm, s),
       };
+    };
+    const drawRobot = (x, y, size, color, yawDeg) => {
+      ctx.save();
+      ctx.translate(x, y);
+      // ชดเชยให้ 0 องศาหันไปทาง "ซ้าย" (Front) และทวนเข็มตามค่า IMU
+      const angleRad = ((180 - yawDeg) * Math.PI) / 180;
+      ctx.rotate(angleRad);
+
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(size * 1.5, 0);
+      ctx.lineTo(-size, size);
+      ctx.lineTo(-size, -size);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.strokeStyle = "rgba(255,255,255,0.9)";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.restore();
     };
     const drawTriangle = (x, y, size, color, dir = "left") => {
       ctx.save();
@@ -854,9 +948,9 @@ export default function App() {
       if (t1Finite) {
         const p1 = toPx(t1.x_mm, t1.y_mm, cx, cy, s, bounds);
 
-        // draw Tag1
-        drawTriangle(p1.px, p1.py, 10, COLORS.tag1, "left");
-        if (show) drawTagLabel("Tag1 (Front)", p1.px, p1.py, true);
+        // วาดหุ่นแบบหมุนได้ (0 องศา = หันซ้าย)
+        drawRobot(p1.px, p1.py, 10, COLORS.tag1, (t1.yaw || 0) - yawOffsetRef.current);
+        if (show) drawTagLabel("Robot UWB", p1.px, p1.py, true);
 
         // XY label (Tag1)
         if (show) {
@@ -1038,10 +1132,12 @@ export default function App() {
             <Divider />
             <Metric label="COORD Y" value={(pose.y_mm / 1000).toFixed(2)} unit="m" />
             <Divider />
+            <Metric label="HEADING" value={((pose.yaw || 0) - yawOffset).toFixed(1)} unit="°" />
+            <Divider />
             <Metric
               label="RMSE"
-              value={rmse == null ? "--" : `${(rmse * 100).toFixed(1)} cm (${rmse.toFixed(3)} m)`}
-              unit=""
+              value={rmse === null ? "0.00" : rmse.toFixed(3)}
+              unit="m"
             />
           </div>
         </header>
@@ -1053,33 +1149,30 @@ export default function App() {
             {/* Anchors + Calibration */}
             <div className="panel" style={{ padding: 16 }}>
               <div className="panelTitle">Anchor distances</div>
+
               <div style={{ display: "grid", gap: 10 }}>
                 {Object.entries(ranges).map(([k, v]) => (
-                  <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-
-                    {/* ✅ แก้จุดที่ 1: ชื่อ A1, A2... ให้เป็นสีขาวสว่างสุด (#ffffff) */}
+                  <div
+                    key={k}
+                    style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
+                  >
                     <span style={{ color: "#ffffff", fontSize: 14, fontWeight: 700 }}>{k}</span>
-
-                    {/* ✅ แก้จุดที่ 2: ตัวเลขระยะทาง ให้สว่างขึ้น (เปลี่ยนจาก var(--muted) เป็น #ffffff หรือ var(--text)) */}
-                    {/* ถ้าอยากได้ขาวจั๊วะให้ใช้ "#ffffff" ถ้าอยากได้ขาวนวลๆ ให้ใช้ "var(--text)" */}
                     <span className="mono" style={{ fontSize: 13, color: "#ffffff" }}>
                       {v.toFixed(2)}m
                     </span>
-
                   </div>
                 ))}
               </div>
 
               <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                  <div className="panelTitle" style={{ margin: 0 }}>
-                    Tag1 calibration
+                  <div className="panelTitle" style={{ margin: 0 }}>Tag1 calibration</div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: CAL_COLOR[calState] || "var(--muted)" }}>
+                    {CAL_TEXT[calState] || "READY"}
                   </div>
-                  <div style={{ fontSize: 12, fontWeight: 800, color: CAL_COLOR[calState] || "var(--muted)" }}>{CAL_TEXT[calState] || "READY"}</div>
                 </div>
 
                 <div style={{ display: "grid", gap: 10 }}>
-                  {/* Row 1: REF inputs */}
                   <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                     <span style={{ fontSize: 12, color: "var(--muted)", fontWeight: 800 }}>REF</span>
 
@@ -1104,7 +1197,6 @@ export default function App() {
                     />
                   </div>
 
-                  {/* Row 2: Buttons (SAVE next to CAL) */}
                   <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                     <button
                       onClick={calT1}
@@ -1113,6 +1205,16 @@ export default function App() {
                       style={{ height: 34, padding: "0 12px", borderRadius: 10 }}
                     >
                       CAL
+                    </button>
+
+                    <button
+                      onClick={calDirection}
+                      disabled={!connected}
+                      className="btn btnNeutral"
+                      style={{ height: 34, padding: "0 12px", borderRadius: 10 }}
+                      title="Set Current Direction as 0 (Front)"
+                    >
+                      CAL DIR
                     </button>
 
                     <button
@@ -1133,117 +1235,110 @@ export default function App() {
                       RESET
                     </button>
                   </div>
+                </div>
 
-                </div>
-                <div style={{ marginTop: 10, fontSize: 12, color: "var(--muted)", lineHeight: 1.35 }}>
-                </div>
+                <div style={{ marginTop: 10, fontSize: 12, color: "var(--muted)", lineHeight: 1.35 }} />
               </div>
             </div>
+
             {/* Manual Drive (TEST) */}
             <div className="panel" style={{ padding: 16 }}>
               <div className="panelTitle">Manual drive (test)</div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, maxWidth: 240 }}>
-                <div />
-                <KeyBtn
-                  label="W"
-                  active={driveKey === "W"}
-                  disabled={!connected || isPaused}
-                  onDown={() => manualPress("W")}
-                  onUp={() => manualRelease("W")}
-                />
-                <div />
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 60px)", gap: 8, justifyContent: "center" }}>
 
-                <KeyBtn
-                  label="A"
-                  active={driveKey === "A"}
-                  disabled={!connected || isPaused}
-                  onDown={() => manualPress("A")}
-                  onUp={() => manualRelease("A")}
-                />
-                <KeyBtn
-                  label="S"
-                  active={driveKey === "S"}
-                  disabled={!connected || isPaused}
-                  onDown={() => manualPress("S")}
-                  onUp={() => manualRelease("S")}
-                />
-                <KeyBtn
-                  label="D"
-                  active={driveKey === "D"}
-                  disabled={!connected || isPaused}
-                  onDown={() => manualPress("D")}
-                  onUp={() => manualRelease("D")}
-                />
+                {/* Q */}
+                <button
+                  className={`btn ${rotKey === "Q" ? "btnPrimary" : "btnNeutral"}`}
+                  onMouseDown={() => rotatePress("Q")}
+                  onMouseUp={rotateRelease}
+                  onMouseLeave={rotateRelease}
+                >
+                  Q
+                </button>
+
+                {/* W */}
+                <button
+                  className={`btn ${driveKey === "W" ? "btnPrimary" : "btnNeutral"}`}
+                  onMouseDown={() => manualPress("W")}
+                  onMouseUp={() => manualRelease("W")}
+                  onMouseLeave={() => manualRelease("W")}
+                >
+                  W
+                </button>
+
+                {/* E */}
+                <button
+                  className={`btn ${rotKey === "E" ? "btnPrimary" : "btnNeutral"}`}
+                  onMouseDown={() => rotatePress("E")}
+                  onMouseUp={rotateRelease}
+                  onMouseLeave={rotateRelease}
+                >
+                  E
+                </button>
+
+                {/* A */}
+                <button
+                  className={`btn ${driveKey === "A" ? "btnPrimary" : "btnNeutral"}`}
+                  onMouseDown={() => manualPress("A")}
+                  onMouseUp={() => manualRelease("A")}
+                  onMouseLeave={() => manualRelease("A")}
+                >
+                  A
+                </button>
+
+                {/* S */}
+                <button
+                  className={`btn ${driveKey === "S" ? "btnPrimary" : "btnNeutral"}`}
+                  onMouseDown={() => manualPress("S")}
+                  onMouseUp={() => manualRelease("S")}
+                  onMouseLeave={() => manualRelease("S")}
+                >
+                  S
+                </button>
+
+                {/* D */}
+                <button
+                  className={`btn ${driveKey === "D" ? "btnPrimary" : "btnNeutral"}`}
+                  onMouseDown={() => manualPress("D")}
+                  onMouseUp={() => manualRelease("D")}
+                  onMouseLeave={() => manualRelease("D")}
+                >
+                  D
+                </button>
               </div>
+
 
               <div style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center" }}>
                 <KeyBtn
-                  label="SPACE (HOLD)"
+                  label="STOP"
                   wide
                   danger
+                  active={stopHeld}              // ✅ ให้มีสถานะกดค้างเหมือนปุ่มอื่น
                   disabled={!connected}
-                  onDown={spaceDown}
-                  onUp={spaceUp}
+                  onDown={stopHoldPress}         // ✅ กดค้าง
+                  onUp={stopHoldRelease}         // ✅ ปล่อยแล้ว resume ถ้ามีปุ่มค้างอยู่
                 />
               </div>
 
               <div style={{ marginTop: 10, fontSize: 12, color: "var(--muted)", lineHeight: 1.35 }}>
-                Keyboard: <b>W A S D</b> to move • Hold <b>Space</b> to stop
+
               </div>
             </div>
 
-            {/* Controls */}
+            {/* Controls (ล่างสุด) ✅ ต้องมี div ครอบ ไม่งั้น </div> จะเพี้ยน */}
             <div style={{ marginTop: "auto", display: "grid", gap: 10 }}>
-              {/* ✅ Save DB (Auto Record) Button */}
-              <button
-                onClick={() => {
-                  const nextState = !isAutoRecording;
-                  setIsAutoRecording(nextState);
-                  if (nextState) {
-                    showToast("STARTED RECORDING DB", "success");
-                  } else {
-                    showToast("STOPPED RECORDING DB", "info");
-                  }
-                }}
-                className="btn"
-                style={{
-                  width: "100%",
-                  padding: 14,
-                  borderRadius: 12,
-                  background: isAutoRecording ? "rgba(234,179,8,0.20)" : "rgba(255,255,255,0.04)",
-                  borderColor: isAutoRecording ? "rgba(234,179,8,0.60)" : "var(--border)",
-                  color: isAutoRecording ? "#fbbf24" : "var(--text)",
-                }}
-              >
-                {isAutoRecording ? (
-                  <>
-                    <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#fbbf24", marginRight: 8, boxShadow: "0 0 8px #fbbf24" }} />
-                    RECORDING DB...
-                  </>
-                ) : (
-                  <>
-                    <div style={{ width: 10, height: 10, borderRadius: "50%", background: "var(--muted)", marginRight: 8 }} />
-                    REC DATABASE
-                  </>
-                )}
-              </button>
-
               <button
                 onClick={async () => {
-
                   if (isPaused) {
-                    // RESUME: แค่ปลดล็อคให้สั่งเดินได้ (ไม่ต้องยิงคำสั่งไป ESP32)
                     setIsPaused(false);
                     showToast("RESUME (unlocked)", "success");
                   } else {
-                    // PAUSE: สั่งหยุดจริง
                     await sendCmd({ cmd: "STOP" });
                     setIsPaused(true);
                     showToast("STOP (paused)", "success");
                   }
                 }}
-
                 className="btn"
                 style={{
                   width: "100%",
