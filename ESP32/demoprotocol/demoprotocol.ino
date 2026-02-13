@@ -13,27 +13,47 @@ WebSocketsServer webSocket = WebSocketsServer(81);
 float currentAngle = 0.0;
 unsigned long previousWiFiCheck = 0;
 const long wifiCheckInterval = 5000; // เช็ค WiFi ทุก 5 วินาที
+bool isWiFiConnected = false;
 
 // --- Serial Buffer ---
 const int MAX_BUFFER_SIZE = 100;
 char inputBuffer[MAX_BUFFER_SIZE];
 int bufferIndex = 0;
 
-// --- Helper Functions ---
+// --- Non-blocking WiFi Functions ---
 void initWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.config(local_IP, gateway, subnet, primaryDNS);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
-  Serial.print("Connecting to WiFi");
+  Serial.println("WiFi: Connecting in background...");
+}
+
+void handleWiFiStateMachine() {
+  unsigned long currentMillis = millis();
   
-  // รอแค่ 10 วินาทีพอ ถ้าไม่ได้ให้ข้ามไปทำงานต่อ (เดี๋ยว Reconnect loop จัดการเอง)
-  int retry = 0;
-  while (WiFi.status() != WL_CONNECTED && retry < 20) { 
-    delay(500); 
-    Serial.print("."); 
-    retry++;
+  // 1. อ่าน State ปัจจุบันของ Hardware
+  bool currentStatus = (WiFi.status() == WL_CONNECTED);
+
+  // 2. Event: เพิ่งต่อติดครั้งแรก หรือกลับมาต่อติดใหม่ (Edge Trigger)
+  if (currentStatus && !isWiFiConnected) {
+    Serial.println("\nWiFi Connected! IP: " + WiFi.localIP().toString());
+    isWiFiConnected = true;
   }
-  Serial.println("\nWiFi Init Complete (Status: " + String(WiFi.status()) + ")");
+  
+  // 3. Event: สัญญาณเพิ่งหลุด (Edge Trigger)
+  else if (!currentStatus && isWiFiConnected) {
+    Serial.println("\nWiFi Lost! System will auto-reconnect in background...");
+    isWiFiConnected = false;
+  }
+
+  // 4. State: กำลังพยายามเชื่อมต่อ (ทำงานทุกๆ wifiCheckInterval)
+  if (!currentStatus) {
+    if (currentMillis - previousWiFiCheck >= wifiCheckInterval) {
+      previousWiFiCheck = currentMillis;
+      Serial.println("Status: Reconnecting to WiFi...");
+      WiFi.reconnect(); // สั่งให้ ESP32 พยายามเชื่อมต่อใหม่แบบไม่บล็อกโค้ด
+    }
+  }
 }
 
 void checkWiFiConnection() {
@@ -178,5 +198,6 @@ void loop() {
   ArduinoOTA.handle();
   webSocket.loop();
   checkSTM32();        
-  checkWiFiConnection(); 
+  
+  handleWiFiStateMachine();
 }
