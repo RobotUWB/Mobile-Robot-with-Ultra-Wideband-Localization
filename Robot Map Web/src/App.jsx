@@ -377,17 +377,13 @@ export default function App() {
   };
 
   /* ================== MANUAL DRIVE LOGIC ================== */
-  const [driveKey, setDriveKey] = useState(null); // "W"/"A"/"S"/"D"/null
-  const [rotKey, setRotKey] = useState(null); // "Q" | "E" | null
+  // Unified active keys stack (Last in = Active)
+  const pressedKeysRef = useRef([]);
 
-  // Refs for interval access
-  const driveKeyRef = useRef(null);
-  const rotKeyRef = useRef(null);
+  // ✅ UI State for button highlights (Restored to fix white screen)
+  const [driveKey, setDriveKey] = useState(null); // 'W', 'A', 'S', 'D' or null
+  const [rotKey, setRotKey] = useState(null);     // 'Q', 'E' or null
 
-  useEffect(() => { driveKeyRef.current = driveKey; }, [driveKey]);
-  useEffect(() => { rotKeyRef.current = rotKey; }, [rotKey]);
-
-  const pressedOrderRef = useRef([]); // เก็บลำดับปุ่มที่ค้าง (อันล่าสุดมี priority)
   const [stopHeld, setStopHeld] = useState(false);
   const stopHeldRef = useRef(false);
 
@@ -408,15 +404,6 @@ export default function App() {
     return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
   };
 
-  const normalizeMoveKey = (k) => {
-    const up = String(k || "").toUpperCase();
-    return ["W", "A", "S", "D"].includes(up) ? up : null;
-  };
-
-  const computeActiveMoveKey = () => {
-    const arr = pressedOrderRef.current;
-    return arr.length ? arr[arr.length - 1] : null;
-  };
   // Function to send drive command (WebSocket Preferred, fallback to HTTP)
   const sendDriveCmd = async (cmdVal) => {
     // 1. WebSocket (Text Mode)
@@ -438,112 +425,116 @@ export default function App() {
       }
     } catch (err) {
       console.error("Cmd Error:", err);
-      console.error("Cmd Error:", err);
     }
   };
 
-  // ✅ New: Send command every 200ms if keys are held
+  // ✅ New: Send command every 200ms based on active key stack
   useEffect(() => {
     const intervalId = setInterval(() => {
       if (isPausedRef2.current) return;
 
-      // Priority 1: STOP held
+      // Priority 1: STOP held (Spacebar) - always wins
       if (stopHeldRef.current) {
         sendDriveCmd(DRIVE_STOP_CMD);
         return;
       }
 
-      // Priority 2: Rotation Key
-      const rKey = rotKeyRef.current;
-      if (rKey) {
-        sendDriveCmd(ROT_CMDS[rKey]);
-        return;
-      }
-
-      // Priority 3: Drive Key
-      const dKey = driveKeyRef.current;
-      if (dKey) {
-        sendDriveCmd(DRIVE_CMDS[dKey]);
+      // Priority 2: Last pressed key (WASD or QE)
+      const stack = pressedKeysRef.current;
+      if (stack.length > 0) {
+        const activeKey = stack[stack.length - 1];
+        // Check if it's a move key or rotate key
+        if (DRIVE_CMDS[activeKey]) {
+          sendDriveCmd(DRIVE_CMDS[activeKey]);
+        } else if (ROT_CMDS[activeKey]) {
+          sendDriveCmd(ROT_CMDS[activeKey]);
+        }
+      } else {
+        // No keys pressed -> STOP (but send repeatedly? usually safer to just active stop once, but user asked for repeat)
+        // To avoid spamming STOP when idle, we could check last sent. 
+        // But for simplicity/safety, let's just active STOP if stack is empty (maybe limit rate to avoid flood if needed)
+        // For now, let's NOT send STOP repeatedly if idle, only on release.
+        // Wait, the user wants "Repeat". If I hold nothing, I shouldn't spam STOP.
+        // The release event sends STOP once. The interval only sends if keys are active.
+        // BUT if I release a key and stack becomes empty, I need to ensure STOP is sent at least once.
+        // The `manualRelease` logic handles the "Release -> Check Stack -> if empty send STOP".
+        // So this interval only needs to handle "Active Keys".
       }
     }, 200);
 
     return () => clearInterval(intervalId);
   }, []);
 
-  const applyManualDrive = async () => {
-    // ถ้าถูก Pause อยู่ (จาก UI) ไม่สั่งเดินซ้ำ
-    if (isPausedRef2.current) return;
-
-    // ✅ ถ้ากำลังกด STOP ค้างอยู่ ให้สั่ง STOP ตลอด และไม่ล้างปุ่มที่ค้าง
-    if (stopHeldRef.current) {
-      sendDriveCmd(DRIVE_STOP_CMD);
+  // Helper to sync UI state with stack
+  const updateActiveKeys = () => {
+    const stack = pressedKeysRef.current;
+    if (stack.length === 0) {
+      setDriveKey(null);
+      setRotKey(null);
       return;
     }
+    const last = stack[stack.length - 1];
+    if (["W", "A", "S", "D"].includes(last)) {
+      setDriveKey(last);
+      setRotKey(null);
+    } else if (["Q", "E"].includes(last)) {
+      setDriveKey(null);
+      setRotKey(last);
+    }
+  };
 
-    const k = computeActiveMoveKey();
-    setDriveKey(k);
+  const handleKeyPress = (k) => {
+    if (!k) return;
+    const stack = pressedKeysRef.current;
+    if (!stack.includes(k)) {
+      stack.push(k);
+      updateActiveKeys();
+    }
+  };
 
-    if (k) {
-      sendDriveCmd(DRIVE_CMDS[k]);
-    } else {
+  const handleKeyRelease = (k) => {
+    if (!k) return;
+    pressedKeysRef.current = pressedKeysRef.current.filter((x) => x !== k);
+    updateActiveKeys();
+
+    // If stack becomes empty, send STOP immediately
+    if (pressedKeysRef.current.length === 0 && !stopHeldRef.current) {
       sendDriveCmd(DRIVE_STOP_CMD);
     }
   };
 
-  const rotatePress = async (k) => {
-    if (isPausedRef2.current) return;
-    setRotKey(k);
-    await sendDriveCmd(ROT_CMDS[k]);
-  };
-
-  const rotateRelease = async () => {
-    setRotKey(null);
-    await sendDriveCmd(DRIVE_STOP_CMD); // ปล่อยแล้วหยุดหมุน
-  };
-
-  const manualPress = async (kRaw) => {
-    const k = normalizeMoveKey(kRaw);
-    if (!k) return;
-
-    const arr = pressedOrderRef.current;
-    if (!arr.includes(k)) arr.push(k);
-    await applyManualDrive();
-  };
-
-  const manualRelease = async (kRaw) => {
-    const k = normalizeMoveKey(kRaw);
-    if (!k) return;
-
-    pressedOrderRef.current = pressedOrderRef.current.filter((x) => x !== k);
-    await applyManualDrive();
-  };
-  const manualReleaseAll = async () => {
-    pressedOrderRef.current = [];
-    setDriveKey(null);
-
-    // ✅ เคลียร์ stop hold ด้วย
-    stopHeldRef.current = false;
-    setStopHeld(false);
-
-    await sendCmd({ cmd: DRIVE_STOP_CMD });
+  // ✅ Wrappers for JSX buttons (Fix ReferenceError)
+  const manualPress = (k) => handleKeyPress(k);
+  const manualRelease = (k) => handleKeyRelease(k);
+  const rotatePress = (k) => handleKeyPress(k);
+  const rotateRelease = () => {
+    // JSX calls this without args for Q/E release
+    handleKeyRelease("Q");
+    handleKeyRelease("E");
   };
 
   const stopHoldPress = () => {
-    // ✅ ไม่ล้าง pressedOrderRef เพื่อให้ปล่อย STOP แล้วกลับไปวิ่งต่อ
     stopHeldRef.current = true;
     setStopHeld(true);
-    sendCmd({ cmd: DRIVE_STOP_CMD });
+    sendDriveCmd(DRIVE_STOP_CMD);
   };
 
-  const stopHoldRelease = async () => {
+  const stopHoldRelease = () => {
     stopHeldRef.current = false;
     setStopHeld(false);
-    await applyManualDrive(); // ✅ ปล่อย STOP แล้วกลับไปตามปุ่มที่ค้างอยู่
+    // If keys are still held, the interval will pick them up in <200ms
+    // Or we can force trigger now:
+    const stack = pressedKeysRef.current;
+    if (stack.length > 0) {
+      const activeKey = stack[stack.length - 1];
+      if (DRIVE_CMDS[activeKey]) sendDriveCmd(DRIVE_CMDS[activeKey]);
+      else if (ROT_CMDS[activeKey]) sendDriveCmd(ROT_CMDS[activeKey]);
+    }
   };
 
   const stopNow = async () => {
     // หยุดแบบ “ตัดคำสั่งเดิน” ไม่ให้กลับไปวิ่งเอง
-    pressedOrderRef.current = [];
+    pressedKeysRef.current = [];
     setDriveKey(null);
 
     await sendCmd({ cmd: "STOP" }); // ✅ ส่ง {"cmd":"STOP"}
@@ -577,17 +568,17 @@ export default function App() {
 
       const r = codeToRotateKey(e.code);
       if (r) {
-        if (e.repeat) return; // Prevent native repeat, use interval instead
+        if (e.repeat) return;
         e.preventDefault();
-        rotatePress(r);
+        handleKeyPress(r);
         return;
       }
 
       const k = codeToMoveKey(e.code);
       if (k) {
-        if (e.repeat) return; // Prevent native repeat, use interval instead
+        if (e.repeat) return;
         e.preventDefault();
-        manualPress(k);
+        handleKeyPress(k);
       }
     };
 
@@ -603,19 +594,20 @@ export default function App() {
       const r = codeToRotateKey(e.code);
       if (r) {
         e.preventDefault();
-        rotateRelease();
+        handleKeyRelease(r);
         return;
       }
 
       const k = codeToMoveKey(e.code);
       if (k) {
         e.preventDefault();
-        manualRelease(k);
+        handleKeyRelease(k);
       }
     };
 
     const onBlur = () => {
-      manualReleaseAll();
+      pressedKeysRef.current = [];
+      if (!stopHeldRef.current) sendDriveCmd(DRIVE_STOP_CMD);
     };
 
     window.addEventListener("keydown", onKeyDown, { passive: false });
