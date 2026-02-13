@@ -7,18 +7,20 @@
 
 // --- Global Objects ---
 HardwareSerial STM32Serial(2);
-WebSocketsServer webSocket = WebSocketsServer(81); 
+WebSocketsServer webSocket = WebSocketsServer(WEBSOCKET_PORT); 
 
 // --- Variables ---
 float currentAngle = 0.0;
 unsigned long previousWiFiCheck = 0;
-const long wifiCheckInterval = 5000; // เช็ค WiFi ทุก 5 วินาที
 bool isWiFiConnected = false;
 
 // --- Serial Buffer ---
-const int MAX_BUFFER_SIZE = 100;
-char inputBuffer[MAX_BUFFER_SIZE];
+char inputBuffer[MAX_SERIAL_BUFFER];
 int bufferIndex = 0;
+
+// --- Heartbeat Timers ---
+unsigned long lastWebHeartbeat = 0;
+unsigned long lastSTM32Heartbeat = 0;
 
 // --- Non-blocking WiFi Functions ---
 void initWiFi() {
@@ -31,45 +33,27 @@ void initWiFi() {
 void handleWiFiStateMachine() {
   unsigned long currentMillis = millis();
   
-  // 1. อ่าน State ปัจจุบันของ Hardware
   bool currentStatus = (WiFi.status() == WL_CONNECTED);
 
-  // 2. Event: เพิ่งต่อติดครั้งแรก หรือกลับมาต่อติดใหม่ (Edge Trigger)
   if (currentStatus && !isWiFiConnected) {
     Serial.println("\nWiFi Connected! IP: " + WiFi.localIP().toString());
     isWiFiConnected = true;
   }
-  
-  // 3. Event: สัญญาณเพิ่งหลุด (Edge Trigger)
   else if (!currentStatus && isWiFiConnected) {
     Serial.println("\nWiFi Lost! System will auto-reconnect in background...");
     isWiFiConnected = false;
   }
 
-  // 4. State: กำลังพยายามเชื่อมต่อ (ทำงานทุกๆ wifiCheckInterval)
   if (!currentStatus) {
-    if (currentMillis - previousWiFiCheck >= wifiCheckInterval) {
+    if (currentMillis - previousWiFiCheck >= WIFI_CHECK_INTERVAL) {
       previousWiFiCheck = currentMillis;
       Serial.println("Status: Reconnecting to WiFi...");
-      WiFi.reconnect(); // สั่งให้ ESP32 พยายามเชื่อมต่อใหม่แบบไม่บล็อกโค้ด
-    }
-  }
-}
-
-void checkWiFiConnection() {
-  unsigned long currentMillis = millis();
-  // เช็คทุกๆ 5 วินาที (Non-blocking)
-  if (currentMillis - previousWiFiCheck >= wifiCheckInterval) {
-    previousWiFiCheck = currentMillis;
-    if (WiFi.status() != WL_CONNECTED) {
-      Serial.println("WiFi Lost! Reconnecting...");
-      WiFi.disconnect();
       WiFi.reconnect();
     }
   }
 }
 
-// ฟังก์ชันส่งข้อมูลไป STM32 แบบมี Checksum
+// --- STM32 Communication ---
 void sendToSTM32(String cmd) {
   String serialCmd = "";
   if      (cmd == "FWD")   serialCmd = "V,300,0";
@@ -79,74 +63,51 @@ void sendToSTM32(String cmd) {
   else if (cmd == "ROTL")  serialCmd = "V,0,200";
   else if (cmd == "ROTR")  serialCmd = "V,0,-200";
   else if (cmd == "STOP")  serialCmd = "S";
+  else if (cmd == "H")     serialCmd = "H"; 
 
   if(serialCmd != "") {
-    // 1. คำนวณ XOR Checksum
     uint8_t cs = 0;
     for (int i = 0; i < serialCmd.length(); i++) {
         cs ^= serialCmd[i];
     }
     
-    // 2. จัดรูปแบบข้อความให้เป็น cmd*CS\n
     char buf[10];
     sprintf(buf, "*%02X\n", cs);
     String finalCmd = serialCmd + String(buf);
     
-    // 3. ส่งไป STM32 (ใช้ print เพราะใส่ \n ไว้แล้ว)
     STM32Serial.print(finalCmd);
-    Serial.print("STM32 << " + finalCmd);
     
-    // 4. Feedback กลับไปหน้าเว็บ
-    String ackJson = "{\"type\":\"ack\", \"cmd\":\"" + cmd + "\", \"status\":\"sent\"}";
-    webSocket.broadcastTXT(ackJson);
+    if (cmd != "H") {
+      Serial.print("STM32 << " + finalCmd);
+      String ackJson = "{\"type\":\"ack\", \"cmd\":\"" + cmd + "\", \"status\":\"sent\"}";
+      webSocket.broadcastTXT(ackJson);
+    }
   }
 }
 
-void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
-  switch(type) {
-    case WStype_DISCONNECTED:
-      Serial.printf("[%u] Disconnected!\n", num);
-      break;
-    case WStype_CONNECTED:
-      Serial.printf("[%u] Connected\n", num);
-      break;
-    case WStype_TEXT:
-      String cmd = String((char*)payload);
-      sendToSTM32(cmd);
-      break;
-  }
-}
-
-// ระบบอ่านข้อมูลที่มี Checksum Filtering
 void checkSTM32() {
   while (STM32Serial.available()) {
     char c = STM32Serial.read();
     
-    // 1. ถ้าเจอ Newline (\n) แสดงว่าจบบรรทัด
     if (c == '\n') {
       inputBuffer[bufferIndex] = '\0';
       String line = String(inputBuffer);
       line.trim();
       bufferIndex = 0;
 
-      // ตรวจหาเครื่องหมาย * ของ Checksum
       int starIndex = line.lastIndexOf('*');
       
       if (starIndex > 0) { 
-        // แยกข้อความกับ Checksum ออกจากกัน
         String payload = line.substring(0, starIndex);
         String recvCsStr = line.substring(starIndex + 1);
         
-        // คำนวณ Checksum เทียบกับสิ่งที่รับมา
         uint8_t calcCs = 0;
         for (int i = 0; i < payload.length(); i++) {
           calcCs ^= payload[i];
         }
         
-        // แปลง String ฐาน 16 เป็นตัวเลข
         uint8_t recvCs = (uint8_t) strtol(recvCsStr.c_str(), NULL, 16);
         
-        // ถ้ารหัสผ่านการตรวจสอบ
         if (calcCs == recvCs) {
           if (payload.startsWith("A=")) {
             currentAngle = payload.substring(2).toFloat();
@@ -160,22 +121,61 @@ void checkSTM32() {
           Serial.println("Warning: Checksum mismatch from STM32. Dropped.");
         }
       } else {
-        // ข้อความไม่มี Checksum (เช่น Debug log ปกติ)
         if (line.length() > 0) {
           Serial.println("STM32 LOG: " + line);
         }
       }
     } 
-    // 2. ถ้ายังไม่จบ ให้เก็บใส่ Buffer
     else {
-      if (bufferIndex < MAX_BUFFER_SIZE - 1) {
-        if (c >= 32) { // กรองขยะ
+      if (bufferIndex < MAX_SERIAL_BUFFER - 1) {
+        if (c >= 32) { 
           inputBuffer[bufferIndex++] = c;
         }
       } else {
-        bufferIndex = 0; // กัน Buffer overflow
+        bufferIndex = 0; 
       }
     }
+  }
+}
+
+// --- WebSocket & Heartbeat ---
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
+  switch(type) {
+    case WStype_DISCONNECTED:
+      Serial.printf("[%u] Disconnected!\n", num);
+      break;
+    case WStype_CONNECTED:
+      Serial.printf("[%u] Connected\n", num);
+      lastWebHeartbeat = millis(); 
+      break;
+    case WStype_TEXT: {
+      String payloadStr = String((char*)payload);
+      if (payloadStr == "PING") {
+        lastWebHeartbeat = millis();
+        webSocket.broadcastTXT("PONG");
+      } else {
+        sendToSTM32(payloadStr);
+      }
+      break;
+    }
+  }
+}
+
+void handleHeartbeat() {
+  unsigned long currentMillis = millis();
+
+  if (webSocket.connectedClients() > 0) {
+    if (currentMillis - lastWebHeartbeat > WEB_TIMEOUT_MS) {
+      Serial.println("Web Timeout! Emergency Brake Activated.");
+      sendToSTM32("STOP"); 
+      webSocket.disconnect(); 
+      lastWebHeartbeat = currentMillis; 
+    }
+  }
+
+  if (currentMillis - lastSTM32Heartbeat >= STM32_HEARTBEAT_INTERVAL) {
+    lastSTM32Heartbeat = currentMillis;
+    sendToSTM32("H");
   }
 }
 
@@ -191,13 +191,13 @@ void setup() {
   webSocket.begin();
   webSocket.onEvent(webSocketEvent);
   
-  Serial.println("System Ready. Checksum Protocol Active.");
+  Serial.println("System Ready. Full Protocol Active.");
 }
 
 void loop() {
   ArduinoOTA.handle();
   webSocket.loop();
   checkSTM32();        
-  
   handleWiFiStateMachine();
+  handleHeartbeat(); 
 }

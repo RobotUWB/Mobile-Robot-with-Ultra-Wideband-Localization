@@ -377,7 +377,7 @@ int main(void) {
 		}
 
 		// 2. ระบบ Watchdog (แยก Block ออกมาให้ชัดเจน)
-		if (HAL_GetTick() - last_cmd_time > 500) {
+		if (HAL_GetTick() - last_cmd_time > 200) {
 			// ถ้าเกิน 0.5 วิ และหุ่นยังมีความเร็วอยู่
 			if ((target_v != 0 || target_w != 0) && is_timeout == 0) {
 				// สั่งเบรกฉุกเฉินทันที
@@ -785,11 +785,15 @@ void Parse_Command(char *cmd) {
 	char type = cmd[0];
 
 	// รีเซ็ต Watchdog (เฉพาะคำสั่งที่ผ่าน Checksum มาแล้วเท่านั้น)
-	if (type == 'V' || type == 'S') {
+	if (type == 'V' || type == 'S' || type == 'H') {
 		last_cmd_time = HAL_GetTick();
 		is_timeout = 0;
 	}
 
+	// ถ้าเป็นคำสั่ง H (Heartbeat) ไม่ต้องทำอะไร ให้จบฟังก์ชันเลย
+	if (type == 'H') {
+		return;
+	}
 	if (type == 'V') {
 		char *p = strtok(cmd + 2, ",");
 		if (p) {
