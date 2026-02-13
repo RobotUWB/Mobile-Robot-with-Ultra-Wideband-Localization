@@ -25,6 +25,7 @@ void initWiFi() {
   WiFi.config(local_IP, gateway, subnet, primaryDNS);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   Serial.print("Connecting to WiFi");
+  
   // รอแค่ 10 วินาทีพอ ถ้าไม่ได้ให้ข้ามไปทำงานต่อ (เดี๋ยว Reconnect loop จัดการเอง)
   int retry = 0;
   while (WiFi.status() != WL_CONNECTED && retry < 20) { 
@@ -48,7 +49,7 @@ void checkWiFiConnection() {
   }
 }
 
-// ฟังก์ชันส่งข้อมูลไป STM32 และแจ้งกลับหน้าเว็บ (Feedback)
+// ฟังก์ชันส่งข้อมูลไป STM32 แบบมี Checksum
 void sendToSTM32(String cmd) {
   String serialCmd = "";
   if      (cmd == "FWD")   serialCmd = "V,300,0";
@@ -58,14 +59,24 @@ void sendToSTM32(String cmd) {
   else if (cmd == "ROTL")  serialCmd = "V,0,200";
   else if (cmd == "ROTR")  serialCmd = "V,0,-200";
   else if (cmd == "STOP")  serialCmd = "S";
-  
-  if(serialCmd != "") {
-    // 1. ส่งไป STM32
-    STM32Serial.println(serialCmd);
-    Serial.println("STM32 << " + serialCmd);
 
-    // 2. Feedback กลับไปหน้าเว็บ (ACK)
-    // บอก Client ว่า "ได้รับคำสั่งแล้วนะ ส่งไปให้หุ่นยนต์แล้ว"
+  if(serialCmd != "") {
+    // 1. คำนวณ XOR Checksum
+    uint8_t cs = 0;
+    for (int i = 0; i < serialCmd.length(); i++) {
+        cs ^= serialCmd[i];
+    }
+    
+    // 2. จัดรูปแบบข้อความให้เป็น cmd*CS\n
+    char buf[10];
+    sprintf(buf, "*%02X\n", cs);
+    String finalCmd = serialCmd + String(buf);
+    
+    // 3. ส่งไป STM32 (ใช้ print เพราะใส่ \n ไว้แล้ว)
+    STM32Serial.print(finalCmd);
+    Serial.print("STM32 << " + finalCmd);
+    
+    // 4. Feedback กลับไปหน้าเว็บ
     String ackJson = "{\"type\":\"ack\", \"cmd\":\"" + cmd + "\", \"status\":\"sent\"}";
     webSocket.broadcastTXT(ackJson);
   }
@@ -86,42 +97,63 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
   }
 }
 
-// Robust Serial Reading (State Machine / Buffering)
+// ระบบอ่านข้อมูลที่มี Checksum Filtering
 void checkSTM32() {
   while (STM32Serial.available()) {
     char c = STM32Serial.read();
-
-    // 1. ถ้าเจอ Newline (\n) แสดงว่าจบบรรทัด -> ประมวลผลทันที
+    
+    // 1. ถ้าเจอ Newline (\n) แสดงว่าจบบรรทัด
     if (c == '\n') {
-      inputBuffer[bufferIndex] = '\0'; // ปิดท้าย String
+      inputBuffer[bufferIndex] = '\0';
       String line = String(inputBuffer);
-      line.trim(); // ตัด \r หรือช่องว่างส่วนเกิน
-      
-      // Reset Buffer สำหรับรอบถัดไป
+      line.trim();
       bufferIndex = 0;
 
-      // ประมวลผลข้อมูล
-      if (line.startsWith("A=")) {
-        currentAngle = line.substring(2).toFloat();
-        // ส่ง JSON ระบุ type เพื่อให้หน้าเว็บแยกแยะได้ง่ายขึ้น
-        String json = "{\"type\":\"data\", \"angle\":" + String(currentAngle) + "}";
-        webSocket.broadcastTXT(json);
-      }
-      else if (line == "OK") { 
-        // กรณี STM32 ตอบ OK กลับมา (ถ้าคุณเขียนเพิ่มใน STM32)
-        webSocket.broadcastTXT("{\"type\":\"ack\", \"status\":\"stm_confirmed\"}");
+      // ตรวจหาเครื่องหมาย * ของ Checksum
+      int starIndex = line.lastIndexOf('*');
+      
+      if (starIndex > 0) { 
+        // แยกข้อความกับ Checksum ออกจากกัน
+        String payload = line.substring(0, starIndex);
+        String recvCsStr = line.substring(starIndex + 1);
+        
+        // คำนวณ Checksum เทียบกับสิ่งที่รับมา
+        uint8_t calcCs = 0;
+        for (int i = 0; i < payload.length(); i++) {
+          calcCs ^= payload[i];
+        }
+        
+        // แปลง String ฐาน 16 เป็นตัวเลข
+        uint8_t recvCs = (uint8_t) strtol(recvCsStr.c_str(), NULL, 16);
+        
+        // ถ้ารหัสผ่านการตรวจสอบ
+        if (calcCs == recvCs) {
+          if (payload.startsWith("A=")) {
+            currentAngle = payload.substring(2).toFloat();
+            String json = "{\"type\":\"data\", \"angle\":" + String(currentAngle) + "}";
+            webSocket.broadcastTXT(json);
+          }
+          else if (payload == "OK") { 
+            webSocket.broadcastTXT("{\"type\":\"ack\", \"status\":\"stm_confirmed\"}");
+          }
+        } else {
+          Serial.println("Warning: Checksum mismatch from STM32. Dropped.");
+        }
+      } else {
+        // ข้อความไม่มี Checksum (เช่น Debug log ปกติ)
+        if (line.length() > 0) {
+          Serial.println("STM32 LOG: " + line);
+        }
       }
     } 
     // 2. ถ้ายังไม่จบ ให้เก็บใส่ Buffer
     else {
       if (bufferIndex < MAX_BUFFER_SIZE - 1) {
-        // กรองตัวอักษรขยะ หรือ \r ออก
-        if (c >= 32) { 
+        if (c >= 32) { // กรองขยะ
           inputBuffer[bufferIndex++] = c;
         }
       } else {
-        // Buffer เต็ม (Overflow protection) -> Reset ทิ้งเพื่อกัน error
-        bufferIndex = 0;
+        bufferIndex = 0; // กัน Buffer overflow
       }
     }
   }
@@ -133,17 +165,18 @@ void setup() {
 
   initWiFi();
   
-  ArduinoOTA.setHostname("CyberBot-Robust");
+  ArduinoOTA.setHostname(OTA_HOSTNAME);
   ArduinoOTA.begin();
 
   webSocket.begin();
   webSocket.onEvent(webSocketEvent);
-  Serial.println("System Ready.");
+  
+  Serial.println("System Ready. Checksum Protocol Active.");
 }
 
 void loop() {
   ArduinoOTA.handle();
   webSocket.loop();
   checkSTM32();        
-  checkWiFiConnection(); // เพิ่มบรรทัดนี้เพื่อเช็คเน็ตตลอดเวลา
+  checkWiFiConnection(); 
 }

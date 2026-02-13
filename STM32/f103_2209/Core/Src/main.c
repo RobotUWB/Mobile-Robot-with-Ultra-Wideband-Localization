@@ -396,7 +396,11 @@ int main(void) {
 		}
 
 		// 3. อัปเดตมุม (ให้ทำงานตลอดเวลา ไม่ต้องรอ Timeout)
-		Update_Heading();
+		static uint32_t last_imu_time = 0;
+		if (HAL_GetTick() - last_imu_time >= 10) { // อ่านทุก 10ms (100Hz)
+			last_imu_time = HAL_GetTick();
+			Update_Heading();
+		}
 
 		// 4. Print Log ออก Debug (ให้ทำงานตลอดเวลา)
 		static uint32_t last_print_time = 0;
@@ -411,8 +415,20 @@ int main(void) {
 		static uint32_t last_telemetry = 0;
 		if (HAL_GetTick() - last_telemetry > 200) {
 			last_telemetry = HAL_GetTick();
-			char tx_buf[32];
-			sprintf(tx_buf, "A=%.2f\n", robot_heading);
+
+			// สร้างข้อความตั้งต้น
+			char payload[32];
+			sprintf(payload, "A=%.2f", robot_heading);
+
+			// คำนวณ Checksum
+			uint8_t cs = 0;
+			for (int i = 0; i < strlen(payload); i++) {
+				cs ^= payload[i];
+			}
+
+			// นำข้อความมารวมกับ * และค่า Checksum (แบบ Hex)
+			char tx_buf[64];
+			sprintf(tx_buf, "%s*%02X\n", payload, cs);
 			HAL_UART_Transmit(&huart1, (uint8_t*) tx_buf, strlen(tx_buf), 10);
 		}
 
@@ -740,30 +756,56 @@ void TMC2209_Init(void) {
 // เปลี่ยนจาก M, T เป็น V (Velocity)
 // V,Linear_Speed,Turn_Speed
 void Parse_Command(char *cmd) {
-	char type = cmd[0];
+	// 1. หาตำแหน่งของตัวดอกจัน (*)
+	char *asterisk = strchr(cmd, '*');
+	if (asterisk == NULL)
+		return; // ถ้าไม่มี * แสดงว่ารูปแบบผิด หรือโดนกวนจนเละ ทิ้งทันที
 
-	if (type == 'V' || type == 'S') {
-		last_cmd_time = HAL_GetTick(); // จดเวลาล่าสุดที่คุยกัน
-		is_timeout = 0;                // ปลดล็อกสถานะ Timeout
+	// 2. คำนวณ Checksum จากข้อความที่ได้รับ
+	uint8_t calc_cs = 0;
+	for (char *p = cmd; p < asterisk; p++) {
+		calc_cs ^= *p; // สัญลักษณ์ ^ คือ XOR
 	}
 
-	if (type == 'V') { // Velocity Command
+	// 3. อ่าน Checksum 2 หลักสุดท้ายที่ ESP32 แนบมา
+	unsigned int recv_cs;
+	if (sscanf(asterisk + 1, "%x", &recv_cs) != 1)
+		return;
+
+	// 4. ยืนยันความถูกต้อง
+	if (calc_cs != recv_cs) {
+		// ถ้าไม่ตรงกัน แสดงว่ามี Noise ในสาย UART
+		HAL_UART_Transmit(&huart2, (uint8_t*) "ERR: Noise Detected!\n", 21, 10);
+		return;
+	}
+
+	// 5. ตัดข้อความตรง * ทิ้ง เพื่อให้โค้ดแยกคำสั่งเดิมทำงานต่อได้ปกติ
+	*asterisk = '\0';
+
+	char type = cmd[0];
+
+	// รีเซ็ต Watchdog (เฉพาะคำสั่งที่ผ่าน Checksum มาแล้วเท่านั้น)
+	if (type == 'V' || type == 'S') {
+		last_cmd_time = HAL_GetTick();
+		is_timeout = 0;
+	}
+
+	if (type == 'V') {
 		char *p = strtok(cmd + 2, ",");
 		if (p) {
-			target_v = atof(p); // ความเร็วทางตรง
+			target_v = atof(p);
 			p = strtok(NULL, ",");
 			if (p)
-				target_w = atof(p); // ความเร็วเลี้ยว (Diff)
+				target_w = atof(p);
 		}
 
 		char log[64];
 		sprintf(log, "CMD: V=%.0f, W=%.0f\n", target_v, target_w);
 		HAL_UART_Transmit(&huart2, (uint8_t*) log, strlen(log), 10);
 		HAL_UART_Transmit(&huart1, (uint8_t*) "OK\n", 3, 10);
-	} else if (type == 'S') { // Stop Command
+	} else if (type == 'S') {
 		target_v = 0;
 		target_w = 0;
-		// หยุดทันที (Force Stop)
 		current_v_L = 0;
 		current_v_R = 0;
 		HAL_UART_Transmit(&huart1, (uint8_t*) "STOP\n", 5, 10);
