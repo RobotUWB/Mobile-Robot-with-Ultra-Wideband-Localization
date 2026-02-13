@@ -379,6 +379,14 @@ export default function App() {
   /* ================== MANUAL DRIVE LOGIC ================== */
   const [driveKey, setDriveKey] = useState(null); // "W"/"A"/"S"/"D"/null
   const [rotKey, setRotKey] = useState(null); // "Q" | "E" | null
+
+  // Refs for interval access
+  const driveKeyRef = useRef(null);
+  const rotKeyRef = useRef(null);
+
+  useEffect(() => { driveKeyRef.current = driveKey; }, [driveKey]);
+  useEffect(() => { rotKeyRef.current = rotKey; }, [rotKey]);
+
   const pressedOrderRef = useRef([]); // เก็บลำดับปุ่มที่ค้าง (อันล่าสุดมี priority)
   const [stopHeld, setStopHeld] = useState(false);
   const stopHeldRef = useRef(false);
@@ -430,8 +438,37 @@ export default function App() {
       }
     } catch (err) {
       console.error("Cmd Error:", err);
+      console.error("Cmd Error:", err);
     }
   };
+
+  // ✅ New: Send command every 200ms if keys are held
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      if (isPausedRef2.current) return;
+
+      // Priority 1: STOP held
+      if (stopHeldRef.current) {
+        sendDriveCmd(DRIVE_STOP_CMD);
+        return;
+      }
+
+      // Priority 2: Rotation Key
+      const rKey = rotKeyRef.current;
+      if (rKey) {
+        sendDriveCmd(ROT_CMDS[rKey]);
+        return;
+      }
+
+      // Priority 3: Drive Key
+      const dKey = driveKeyRef.current;
+      if (dKey) {
+        sendDriveCmd(DRIVE_CMDS[dKey]);
+      }
+    }, 200);
+
+    return () => clearInterval(intervalId);
+  }, []);
 
   const applyManualDrive = async () => {
     // ถ้าถูก Pause อยู่ (จาก UI) ไม่สั่งเดินซ้ำ
@@ -540,8 +577,7 @@ export default function App() {
 
       const r = codeToRotateKey(e.code);
       if (r) {
-        // ✅ Allow repeated KeyDown for rotation too
-        // if (e.repeat) return; 
+        if (e.repeat) return; // Prevent native repeat, use interval instead
         e.preventDefault();
         rotatePress(r);
         return;
@@ -549,8 +585,7 @@ export default function App() {
 
       const k = codeToMoveKey(e.code);
       if (k) {
-        // ✅ Allow repeated KeyDown to send multiple commands
-        // if (e.repeat) return;
+        if (e.repeat) return; // Prevent native repeat, use interval instead
         e.preventDefault();
         manualPress(k);
       }
