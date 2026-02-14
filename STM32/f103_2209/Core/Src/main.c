@@ -79,6 +79,12 @@ float gyro_z_offset = 0;
 
 float robot_heading = 0.0f;   // มุมสะสม (Heading)
 uint32_t prev_imu_time = 0;   // เวลาล่าสุดที่คำนวณ (ใช้ micros)
+<<<<<<< HEAD
+=======
+
+uint32_t last_cmd_time = 0;
+uint8_t is_timeout = 0;
+>>>>>>> parent of 8ab0966 (Revert "Merge branch 'udev' of https://github.com/RobotUWB/Mobile-Robot-with-Ultra-Wideband-Localization into Ice")
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -292,6 +298,7 @@ void ICM_Calibrate(void) {
 	HAL_UART_Transmit(&huart2, (uint8_t*) log, strlen(log), 100);
 }
 void Update_Heading(void) {
+<<<<<<< HEAD
     // 1. อ่านค่า Gyro ปัจจุบัน (และลบ Offset ที่ Calibrate แล้ว)
     ICM_ReadGyroZ();
 
@@ -308,6 +315,25 @@ void Update_Heading(void) {
     if (fabsf(gyro_z_dps) > 1.5f) {
         robot_heading += gyro_z_dps * dt;
     }
+=======
+	// 1. อ่านค่า Gyro ปัจจุบัน (และลบ Offset ที่ Calibrate แล้ว)
+	ICM_ReadGyroZ();
+
+	// 2. คำนวณเวลาที่ผ่านไป (dt) เป็นวินาที
+	uint32_t now = micros();
+	float dt = (now - prev_imu_time) / 1000000.0f; // แปลง us เป็น s
+	prev_imu_time = now;
+
+	// 3. ป้องกันบั๊กเวลา dt กระโดด (เช่น รอบแรกสุด)
+	if (dt > 1.0f)
+		dt = 0;
+
+	// 4. คำนวณมุมสะสม (Integration)
+	// ถ้า Gyro นิ่งจริง (น้อยกว่า 0.05 dps) ไม่ต้องบวก (Deadband) เพื่อตัด Noise
+	if (fabsf(gyro_z_dps) > 1.5f) {
+		robot_heading += gyro_z_dps * dt;
+	}
+>>>>>>> parent of 8ab0966 (Revert "Merge branch 'udev' of https://github.com/RobotUWB/Mobile-Robot-with-Ultra-Wideband-Localization into Ice")
 }
 /* USER CODE END 0 */
 
@@ -366,11 +392,16 @@ int main(void) {
 	/* Infinite loop */
 	/* USER CODE BEGIN WHILE */
 	while (1) {
+<<<<<<< HEAD
+=======
+		// 1. รับคำสั่ง
+>>>>>>> parent of 8ab0966 (Revert "Merge branch 'udev' of https://github.com/RobotUWB/Mobile-Robot-with-Ultra-Wideband-Localization into Ice")
 		if (cmd_ready) {
 			cmd_ready = 0;
 			Parse_Command((char*) rx_buffer);
 		}
 
+<<<<<<< HEAD
 		if (HAL_GetTick() - last_imu_time > 10) {
 			last_imu_time = HAL_GetTick();
 
@@ -388,15 +419,73 @@ int main(void) {
 			}
 		}
 
+=======
+		// 2. ระบบ Watchdog (แยก Block ออกมาให้ชัดเจน)
+		if (HAL_GetTick() - last_cmd_time > 200) {
+			// ถ้าเกิน 0.5 วิ และหุ่นยังมีความเร็วอยู่
+			if ((target_v != 0 || target_w != 0) && is_timeout == 0) {
+				// สั่งเบรกฉุกเฉินทันที
+				target_v = 0;
+				target_w = 0;
+				current_v_L = 0;
+				current_v_R = 0;
+
+				is_timeout = 1; // ล็อกไว้
+
+				// ส่งข้อความแจ้งเตือนไปที่ Debug
+				char timeout_msg[] = "WARNING: Signal Lost! Auto Stopped.\n";
+				HAL_UART_Transmit(&huart2, (uint8_t*) timeout_msg,
+						strlen(timeout_msg), 10);
+			}
+		}
+
+		// 3. อัปเดตมุม (ให้ทำงานตลอดเวลา ไม่ต้องรอ Timeout)
+		static uint32_t last_imu_time = 0;
+		if (HAL_GetTick() - last_imu_time >= 10) { // อ่านทุก 10ms (100Hz)
+			last_imu_time = HAL_GetTick();
+			Update_Heading();
+		}
+
+		// 4. Print Log ออก Debug (ให้ทำงานตลอดเวลา)
+		static uint32_t last_print_time = 0;
+		if (HAL_GetTick() - last_print_time >= 500) { // ปริ้นทุก 500ms จะชัวร์กว่านับลูป
+			last_print_time = HAL_GetTick();
+			char log[64];
+			sprintf(log, "GZ: %.2f | ANG: %.2f\n", gyro_z_dps, robot_heading);
+			HAL_UART_Transmit(&huart2, (uint8_t*) log, strlen(log), 10);
+		}
+
+		// 5. ส่ง Telemetry ไป ESP32
+>>>>>>> parent of 8ab0966 (Revert "Merge branch 'udev' of https://github.com/RobotUWB/Mobile-Robot-with-Ultra-Wideband-Localization into Ice")
 		static uint32_t last_telemetry = 0;
 		if (HAL_GetTick() - last_telemetry > 200) {
 			last_telemetry = HAL_GetTick();
 
+<<<<<<< HEAD
 			char tx_buf[32];
 			// ส่งรูปแบบ "A=มุม\n" (เช่น A=90.50)
 			sprintf(tx_buf, "A=%.2f\n", robot_heading);
 			HAL_UART_Transmit(&huart1, (uint8_t*) tx_buf, strlen(tx_buf), 10);
 		}
+=======
+			// สร้างข้อความตั้งต้น
+			char payload[32];
+			sprintf(payload, "A=%.2f", robot_heading);
+
+			// คำนวณ Checksum
+			uint8_t cs = 0;
+			for (int i = 0; i < strlen(payload); i++) {
+				cs ^= payload[i];
+			}
+
+			// นำข้อความมารวมกับ * และค่า Checksum (แบบ Hex)
+			char tx_buf[64];
+			sprintf(tx_buf, "%s*%02X\n", payload, cs);
+			HAL_UART_Transmit(&huart1, (uint8_t*) tx_buf, strlen(tx_buf), 10);
+		}
+
+		// 6. ขับมอเตอร์
+>>>>>>> parent of 8ab0966 (Revert "Merge branch 'udev' of https://github.com/RobotUWB/Mobile-Robot-with-Ultra-Wideband-Localization into Ice")
 		Run_Motors_Loop();
 		/* USER CODE END WHILE */
 
@@ -720,6 +809,7 @@ void TMC2209_Init(void) {
 // เปลี่ยนจาก M, T เป็น V (Velocity)
 // V,Linear_Speed,Turn_Speed
 void Parse_Command(char *cmd) {
+<<<<<<< HEAD
 	char type = cmd[0];
 
 	if (type == 'V') { // Velocity Command
@@ -729,16 +819,69 @@ void Parse_Command(char *cmd) {
 			p = strtok(NULL, ",");
 			if (p)
 				target_w = atof(p); // ความเร็วเลี้ยว (Diff)
+=======
+	// 1. หาตำแหน่งของตัวดอกจัน (*)
+	char *asterisk = strchr(cmd, '*');
+	if (asterisk == NULL)
+		return; // ถ้าไม่มี * แสดงว่ารูปแบบผิด หรือโดนกวนจนเละ ทิ้งทันที
+
+	// 2. คำนวณ Checksum จากข้อความที่ได้รับ
+	uint8_t calc_cs = 0;
+	for (char *p = cmd; p < asterisk; p++) {
+		calc_cs ^= *p; // สัญลักษณ์ ^ คือ XOR
+	}
+
+	// 3. อ่าน Checksum 2 หลักสุดท้ายที่ ESP32 แนบมา
+	unsigned int recv_cs;
+	if (sscanf(asterisk + 1, "%x", &recv_cs) != 1)
+		return;
+
+	// 4. ยืนยันความถูกต้อง
+	if (calc_cs != recv_cs) {
+		// ถ้าไม่ตรงกัน แสดงว่ามี Noise ในสาย UART
+		HAL_UART_Transmit(&huart2, (uint8_t*) "ERR: Noise Detected!\n", 21, 10);
+		return;
+	}
+
+	// 5. ตัดข้อความตรง * ทิ้ง เพื่อให้โค้ดแยกคำสั่งเดิมทำงานต่อได้ปกติ
+	*asterisk = '\0';
+
+	char type = cmd[0];
+
+	// รีเซ็ต Watchdog (เฉพาะคำสั่งที่ผ่าน Checksum มาแล้วเท่านั้น)
+	if (type == 'V' || type == 'S' || type == 'H') {
+		last_cmd_time = HAL_GetTick();
+		is_timeout = 0;
+	}
+
+	// ถ้าเป็นคำสั่ง H (Heartbeat) ไม่ต้องทำอะไร ให้จบฟังก์ชันเลย
+	if (type == 'H') {
+		return;
+	}
+	if (type == 'V') {
+		char *p = strtok(cmd + 2, ",");
+		if (p) {
+			target_v = atof(p);
+			p = strtok(NULL, ",");
+			if (p)
+				target_w = atof(p);
+>>>>>>> parent of 8ab0966 (Revert "Merge branch 'udev' of https://github.com/RobotUWB/Mobile-Robot-with-Ultra-Wideband-Localization into Ice")
 		}
 
 		char log[64];
 		sprintf(log, "CMD: V=%.0f, W=%.0f\n", target_v, target_w);
 		HAL_UART_Transmit(&huart2, (uint8_t*) log, strlen(log), 10);
 		HAL_UART_Transmit(&huart1, (uint8_t*) "OK\n", 3, 10);
+<<<<<<< HEAD
 	} else if (type == 'S') { // Stop Command
 		target_v = 0;
 		target_w = 0;
 		// หยุดทันที (Force Stop)
+=======
+	} else if (type == 'S') {
+		target_v = 0;
+		target_w = 0;
+>>>>>>> parent of 8ab0966 (Revert "Merge branch 'udev' of https://github.com/RobotUWB/Mobile-Robot-with-Ultra-Wideband-Localization into Ice")
 		current_v_L = 0;
 		current_v_R = 0;
 		HAL_UART_Transmit(&huart1, (uint8_t*) "STOP\n", 5, 10);
@@ -790,4 +933,8 @@ void assert_failed(uint8_t *file, uint32_t line)
      ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
   /* USER CODE END 6 */
 }
+<<<<<<< HEAD
 #endif /* USE_FULL_ASSERT */
+=======
+#endif /* USE_FULL_ASSERT */
+>>>>>>> parent of 8ab0966 (Revert "Merge branch 'udev' of https://github.com/RobotUWB/Mobile-Robot-with-Ultra-Wideband-Localization into Ice")
