@@ -204,16 +204,9 @@ input.cal-in[type=number]{
     ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); }
   `}</style>
 );
-/* ================== CONFIG ================== */
-// UWB Tag (192.168.88.99) -> Proxy: /pos
-const POS_BASE = "/pos";
-
 // Robot Controller STM32 (192.168.88.115) -> Proxy: /robot
 const CMD_BASE = "/robot";
-
-const API_URL = `${POS_BASE}/json`;
 const CMD_URL = `${CMD_BASE}/cmd`;
-const api = (path) => `${POS_BASE}${path}`;
 
 const FIELD_W = 3000;
 const FIELD_H = 2000;
@@ -289,6 +282,9 @@ export default function App() {
   const wsCmdRef = useRef(null);
   const [wsConnected, setWsConnected] = useState(false);
 
+  // WebSocket for UWB Data
+  const uwbWsRef = useRef(null);
+
   // Tag1
   const [pose, setPose] = useState({ x_mm: 0, y_mm: 0, yaw: 0 });
   const [yawOffset, setYawOffset] = useState(() => {
@@ -340,18 +336,15 @@ export default function App() {
     setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 2600);
   };
 
-  /* --- API Actions --- */
+  /* --- API Actions (Control Fallback) --- */
   const sendCmd = async ({ cmd }) => {
     try {
       const res = await fetch(CMD_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cmd }), // ✅ ESP32 ต้องการ {cmd:"FWD"} แบบนี้
+        body: JSON.stringify({ cmd }),
         cache: "no-store",
       });
-
-      const txt = await res.text().catch(() => "");
-      if (!res.ok) console.error("CMD Error", res.status, txt);
       return res.ok;
     } catch (e) {
       console.error("CMD fetch failed:", e);
@@ -359,8 +352,8 @@ export default function App() {
     }
   };
 
-  // ===== Calibration Actions (GET endpoints like friend's ESP32) =====
-  const calT1 = async () => {
+  /* --- WebSocket Actions --- */
+  const calT1 = () => {
     const x = parseFloat(refX);
     const y = parseFloat(refY);
     if (!Number.isFinite(x) || !Number.isFinite(y)) {
@@ -368,38 +361,30 @@ export default function App() {
       return;
     }
 
-    try {
-      const url = api(
-        `/cal?x=${encodeURIComponent(x)}&y=${encodeURIComponent(y)}`,
-      );
-      const r = await fetch(url);
-      if (!r.ok) throw new Error("CAL failed");
-      showToast("CAL T1 started", "success");
-    } catch (e) {
-      console.error(e);
-      showToast("CAL T1 failed (check /cal endpoint)", "error");
+    if (uwbWsRef.current && uwbWsRef.current.readyState === WebSocket.OPEN) {
+      // ใช้ CAL x y สำหรับ Single point (ตาม WebWorker(2).cpp)
+      uwbWsRef.current.send(`CAL ${x} ${y}`);
+      showToast("CAL T1 (Single) started", "success");
+    } else {
+      showToast("UWB WebSocket not connected", "error");
     }
   };
 
-  const saveT1 = async () => {
-    try {
-      const r = await fetch(api("/save"));
-      if (!r.ok) throw new Error("SAVE failed");
-      showToast("SAVE T1 OK", "success");
-    } catch (e) {
-      console.error(e);
-      showToast("SAVE T1 failed (check /save endpoint)", "error");
+  const saveT1 = () => {
+    if (uwbWsRef.current && uwbWsRef.current.readyState === WebSocket.OPEN) {
+      uwbWsRef.current.send("SAVE");
+      showToast("SAVE T1 Sent", "success");
+    } else {
+      showToast("UWB WebSocket not connected", "error");
     }
   };
 
-  const resetT1 = async () => {
-    try {
-      const r = await fetch(api("/reset"));
-      if (!r.ok) throw new Error("RESET failed");
-      showToast("RESET T1 OK", "success");
-    } catch (e) {
-      console.error(e);
-      showToast("RESET T1 failed (check /reset endpoint)", "error");
+  const resetT1 = () => {
+    if (uwbWsRef.current && uwbWsRef.current.readyState === WebSocket.OPEN) {
+      uwbWsRef.current.send("RESET");
+      showToast("RESET T1 Sent", "success");
+    } else {
+      showToast("UWB WebSocket not connected", "error");
     }
   };
 
@@ -663,6 +648,7 @@ export default function App() {
     const connectWsUwb = () => {
       console.log("WS-UWB: Connecting to", UWB_WS_URL);
       const ws = new WebSocket(UWB_WS_URL);
+      uwbWsRef.current = ws;
 
       ws.onopen = () => {
         console.log("WS-UWB: Connected");
@@ -1591,7 +1577,7 @@ export default function App() {
                     setIsPaused(false);
                     showToast("RESUME (unlocked)", "success");
                   } else {
-                    await sendCmd({ cmd: "STOP" });
+                    sendDriveCmd("STOP");
                     setIsPaused(true);
                     showToast("STOP (paused)", "success");
                   }
