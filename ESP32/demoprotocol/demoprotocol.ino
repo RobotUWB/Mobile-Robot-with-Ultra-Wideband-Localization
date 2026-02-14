@@ -64,9 +64,16 @@ void sendToSTM32(String cmd) {
   else if (cmd == "ROTR")  serialCmd = "V,0,-200";
   else if (cmd == "STOP")  serialCmd = "S";
 <<<<<<< HEAD
+<<<<<<< HEAD
   
   if(serialCmd != "") {
     // 1. ส่งไป STM32
+=======
+  else if (cmd == "H")     serialCmd = "H"; 
+
+  if(serialCmd != "") {
+    uint8_t cs = 0;
+>>>>>>> 0bd7d42c9ba38d25e6515573262e79af65b011c5
     for (int i = 0; i < serialCmd.length(); i++) {
         cs ^= serialCmd[i];
     }
@@ -134,7 +141,51 @@ void checkSTM32() {
       } else {
         bufferIndex = 0; 
       }
+<<<<<<< HEAD
+=======
     }
+  }
+}
+
+// --- WebSocket & Heartbeat ---
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
+  switch(type) {
+    case WStype_DISCONNECTED:
+      Serial.printf("[%u] Disconnected!\n", num);
+      break;
+    case WStype_CONNECTED:
+      Serial.printf("[%u] Connected\n", num);
+      lastWebHeartbeat = millis(); 
+      break;
+    case WStype_TEXT: {
+      String payloadStr = String((char*)payload);
+      if (payloadStr == "PING") {
+        lastWebHeartbeat = millis();
+        webSocket.broadcastTXT("PONG");
+      } else {
+        sendToSTM32(payloadStr);
+      }
+      break;
+    }
+  }
+}
+
+void handleHeartbeat() {
+  unsigned long currentMillis = millis();
+
+  if (webSocket.connectedClients() > 0) {
+    if (currentMillis - lastWebHeartbeat > WEB_TIMEOUT_MS) {
+      Serial.println("Web Timeout! Emergency Brake Activated.");
+      sendToSTM32("STOP"); 
+      webSocket.disconnect(); 
+      lastWebHeartbeat = currentMillis; 
+>>>>>>> 0bd7d42c9ba38d25e6515573262e79af65b011c5
+    }
+  }
+
+  if (currentMillis - lastSTM32Heartbeat >= STM32_HEARTBEAT_INTERVAL) {
+    lastSTM32Heartbeat = currentMillis;
+    sendToSTM32("H");
   }
 }
 
