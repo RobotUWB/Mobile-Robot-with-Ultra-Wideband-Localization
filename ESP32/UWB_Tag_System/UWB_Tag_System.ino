@@ -4,7 +4,7 @@
 #include <esp_now.h>
 #include <WiFi.h>
 
-// =================== GLOBAL VARIABLE DEFINITIONS ==================+
+// =================== GLOBAL VARIABLE DEFINITIONS ==================
 Preferences prefs;
 float bias[4] = { 0, 0, 0, 0 };
 
@@ -38,22 +38,20 @@ double mp_bias_sum[4] = { 0, 0, 0, 0 };
 int mp_bias_cnt[4] = { 0, 0, 0, 0 };
 int cal_state = 0; 
 
-// [แก้ไข] ประกาศ Mutex ที่นี่ (Global) เพื่อให้ใช้ร่วมกันได้จริง
+// [CRITICAL] ประกาศ Mutex ที่นี่ (Global)
 portMUX_TYPE myMutex = portMUX_INITIALIZER_UNLOCKED;
 
-// --- ตัวแปร volatile สำหรับรับค่าจาก ESP-NOW ---
-// ใช้ในฟังก์ชัน OnDataRecv เท่านั้น เพื่อความเสถียร
+// --- ESP-NOW Vars ---
 volatile float isr_t2_x = 0.0f;
 volatile float isr_t2_y = 0.0f;
 volatile uint32_t isr_t2_last_ms = 0;
 volatile bool isr_new_data = false;
 
-// ตัวแปร Global จริงที่ WebWorker จะมาดึงไปใช้ (ประกาศไว้ใน Shared.h)
+// WebWorker Shared Vars
 float t2_x = 0.0f;
 float t2_y = 0.0f;
 uint32_t t2_last_ms = 0;
 
-// โครงสร้างข้อมูลต้องตรงกับ Tag 2
 typedef struct struct_message {
   int id;       
   float x;
@@ -62,44 +60,34 @@ typedef struct struct_message {
 
 struct_message incomingData;
 
-// ฟังก์ชัน Callback เมื่อได้รับข้อมูลจาก Tag 2
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingDataPtr, int len) {
-  
-  // [SAFETY CHECK] ตรวจสอบขนาดข้อมูลก่อน เพื่อป้องกันข้อมูลขยะ
-  if (len != sizeof(incomingData)) {
-    return; // ถ้าขนาดไม่ตรง ให้ข้ามไปเลย
-  }
-
+  if (len != sizeof(incomingData)) return;
   memcpy(&incomingData, incomingDataPtr, sizeof(incomingData));
-
-  // ตรวจสอบว่าเป็น ID 2 หรือไม่
   if (incomingData.id == 2) {
-    // อัปเดตลงตัวแปร volatile
     isr_t2_x = incomingData.x;
     isr_t2_y = incomingData.y;
     isr_t2_last_ms = millis();
-    isr_new_data = true; // แจ้ง main loop ว่ามีของใหม่มา
+    isr_new_data = true; 
   }
 }
 
 // =================== MAIN SETUP ===================
 void setup() {
   Serial.begin(115200);
-  delay(500); // รอสักนิดให้ Serial พร้อม
+  delay(500); 
 
-  // 1. Setup Web & WiFi (Must be first to set Channel)
+  // 1. Setup Web & WiFi 
   setupWeb();
 
   Serial.println("-------------------------------------");
   Serial.print("[TAG 1] WiFi SSID: "); Serial.println(WiFi.SSID());
   Serial.print("[TAG 1] WiFi Channel: "); Serial.println(WiFi.channel());
   Serial.println("-------------------------------------");
-  // หมายเหตุ: Tag 2 ต้องรันบน Channel เดียวกันนี้
   
   // เริ่ม ESP-NOW หลังจาก WiFi
   if (esp_now_init() == ESP_OK) {
     esp_now_register_recv_cb(esp_now_recv_cb_t(OnDataRecv));
-    Serial.println("[ESP-NOW] Init Success - Waiting for Tag 2...");
+    Serial.println("[ESP-NOW] Init Success");
   } else {
     Serial.println("[ESP-NOW] Init Failed!");
   }
@@ -112,19 +100,23 @@ void setup() {
 void loop() {
   // --- ย้ายค่าจาก ISR เข้าตัวแปรหลักอย่างปลอดภัย ---
   if (isr_new_data) {
-    // [CRITICAL SECTION] ป้องกันข้อมูลตีกันระหว่าง Interrupt และ Main Loop
-    // [แก้ไข] ใช้ตัวแปร Global myMutex แทนการประกาศใหม่
     portENTER_CRITICAL(&myMutex);
-
     t2_x = isr_t2_x;
     t2_y = isr_t2_y;
     t2_last_ms = isr_t2_last_ms;
     isr_new_data = false;
-
     portEXIT_CRITICAL(&myMutex);
   }
 
-  loopUWB();
-  loopWeb();
-  //delay(1); 
+  // [แก้ไข] Priority Logic: ให้ UWB ทำงานหนักกว่า Web
+  // เพื่อป้องกันไม่ให้ UWB ขาดช่วงจน Anchor หลุด
+  
+  loopUWB(); // ทำงานทุกรอบ (Real-time)
+
+  // Web/WiFi ทำงานแค่ทุกๆ 20ms (50Hz) ก็พอ
+  static uint32_t last_web_poll = 0;
+  if (millis() - last_web_poll > 50) {
+      last_web_poll = millis();
+      loopWeb();
+  }
 }
