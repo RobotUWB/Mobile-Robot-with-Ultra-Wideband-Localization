@@ -220,6 +220,8 @@ const FIELD_H = 2000;
 
 // WebSocket Control (192.168.88.115:81)
 const CMD_WS_URL = "ws://192.168.88.115:81";
+// WebSocket UWB (192.168.88.99:81)
+const UWB_WS_URL = "ws://192.168.88.99:81";
 const WS_MAX_MISSED = 20;
 
 const ZOOM_MIN = 0.05,
@@ -654,83 +656,99 @@ export default function App() {
     };
   }, []);
 
-  /* --- HTTP Polling for UWB Data + Heading --- */
+  /* --- WebSocket for UWB Data (Position + Anchors) --- */
   useEffect(() => {
-    const pollData = async () => {
-      try {
-        // --- Fetch UWB data from ESP32 (192.168.88.99) ---
-        const res = await fetch(API_URL);
-        if (!res.ok) throw new Error(`UWB fetch failed: ${res.status}`);
-        const j = await res.json();
+    let uwbReconnectTimeout = null;
 
-        missedHeartbeatsRef.current = 0;
+    const connectWsUwb = () => {
+      console.log("WS-UWB: Connecting to", UWB_WS_URL);
+      const ws = new WebSocket(UWB_WS_URL);
+
+      ws.onopen = () => {
+        console.log("WS-UWB: Connected");
         setConnected(true);
+        missedHeartbeatsRef.current = 0;
+      };
 
-        // Position
-        const xVal = Number(j.x);
-        const yVal = Number(j.y);
-        const tag1Ok =
-          Number.isFinite(xVal) &&
-          Number.isFinite(yVal) &&
-          xVal !== -1 &&
-          yVal !== -1;
+      ws.onmessage = (event) => {
+        try {
+          const j = JSON.parse(event.data);
+          missedHeartbeatsRef.current = 0;
 
-        if (tag1Ok) {
-          const xs = anchorsRef.current.map((a) => a.x_mm);
-          const ys = anchorsRef.current.map((a) => a.y_mm);
-          const minX = Math.min(...xs);
-          const maxX = Math.max(...xs);
-          const minY = Math.min(...ys);
-          const maxY = Math.max(...ys);
+          // Position
+          const xVal = Number(j.x);
+          const yVal = Number(j.y);
+          const tag1Ok =
+            Number.isFinite(xVal) &&
+            Number.isFinite(yVal) &&
+            xVal !== -1 &&
+            yVal !== -1;
 
-          setPose((prev) => ({
-            x_mm: clamp(xVal * 1000, minX, maxX),
-            y_mm: clamp(yVal * 1000, minY, maxY),
-            yaw: prev.yaw,
-          }));
+          if (tag1Ok) {
+            const xs = anchorsRef.current.map((a) => a.x_mm);
+            const ys = anchorsRef.current.map((a) => a.y_mm);
+            const minX = Math.min(...xs);
+            const maxX = Math.max(...xs);
+            const minY = Math.min(...ys);
+            const maxY = Math.max(...ys);
+
+            setPose((prev) => ({
+              x_mm: clamp(xVal * 1000, minX, maxX),
+              y_mm: clamp(yVal * 1000, minY, maxY),
+              yaw: prev.yaw,
+            }));
+          }
+
+          // Anchor distances
+          if (j.a && Array.isArray(j.a)) {
+            const newRanges = {
+              A1: parseFloat(j.a[0]) || 0,
+              A2: parseFloat(j.a[1]) || 0,
+              A3: parseFloat(j.a[2]) || 0,
+              A4: parseFloat(j.a[3]) || 0,
+            };
+            rangesRef.current = newRanges;
+            setRanges(newRanges);
+          }
+
+          // Calibration state
+          const cs = Number(j.cs);
+          if (Number.isFinite(cs)) setCalState(Math.max(0, Math.min(4, cs)));
+
+          // RMSE
+          const r = Number(j.rmse);
+          if (Number.isFinite(r)) setRmse(r);
+
+          // Anchor positions (anch_xy) from ESP32
+          if (j.anch_xy && Array.isArray(j.anch_xy)) {
+            const newAnchors = j.anch_xy.map((p, i) => ({
+              id: `A${i + 1}`,
+              x_mm: p[0] * 1000,
+              y_mm: p[1] * 1000,
+            }));
+            if (newAnchors.length >= 3) setAnchors(newAnchors);
+          }
+        } catch (e) {
+          console.error("WS-UWB parse error:", e);
         }
+      };
 
-        // Anchor distances
-        if (j.a && Array.isArray(j.a)) {
-          const newRanges = {
-            A1: parseFloat(j.a[0]) || 0,
-            A2: parseFloat(j.a[1]) || 0,
-            A3: parseFloat(j.a[2]) || 0,
-            A4: parseFloat(j.a[3]) || 0,
-          };
-          rangesRef.current = newRanges;
-          setRanges(newRanges);
-        }
+      ws.onclose = () => {
+        console.log("WS-UWB: Closed, reconnecting...");
+        setConnected(false);
+        uwbReconnectTimeout = setTimeout(connectWsUwb, 2000);
+      };
 
-        // Calibration state
-        const cs = Number(j.cs);
-        if (Number.isFinite(cs)) setCalState(Math.max(0, Math.min(4, cs)));
-
-        // RMSE
-        const r = Number(j.rmse);
-        if (Number.isFinite(r)) setRmse(r);
-
-        // Anchor positions (anch_xy) from ESP32
-        if (j.anch_xy && Array.isArray(j.anch_xy)) {
-          const newAnchors = j.anch_xy.map((p, i) => ({
-            id: `A${i + 1}`,
-            x_mm: p[0] * 1000,
-            y_mm: p[1] * 1000,
-          }));
-          if (newAnchors.length >= 3) setAnchors(newAnchors);
-        }
-      } catch (err) {
-        missedHeartbeatsRef.current += 1;
-        if (missedHeartbeatsRef.current >= 10) setConnected(false);
-      }
+      ws.onerror = (e) => {
+        console.error("WS-UWB Error:", e);
+        ws.close();
+      };
     };
 
-    // Poll UWB data every 200ms
-    const dataInterval = setInterval(pollData, 200);
-    pollData();
+    connectWsUwb();
 
     return () => {
-      clearInterval(dataInterval);
+      if (uwbReconnectTimeout) clearTimeout(uwbReconnectTimeout);
     };
   }, []);
 
