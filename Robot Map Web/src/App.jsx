@@ -582,6 +582,7 @@ export default function App() {
       }
     };
 
+    
     const onKeyUp = (e) => {
       if (isTypingTarget(e.target)) return;
 
