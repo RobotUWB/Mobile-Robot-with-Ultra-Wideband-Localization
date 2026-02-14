@@ -1,0 +1,120 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>CyberBot Test Control</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        text-align: center;
+        background: #f4f4f4;
+        padding-top: 50px;
+      }
+      .angle-display {
+        font-size: 60px;
+        color: #007bff;
+        margin: 20px;
+        font-weight: bold;
+      }
+      .controls button {
+        width: 120px;
+        height: 60px;
+        margin: 10px;
+        cursor: pointer;
+        font-weight: bold;
+        font-size: 16px;
+      }
+      .status {
+        padding: 5px 10px;
+        border-radius: 5px;
+        font-weight: bold;
+      }
+      .connected {
+        background: #d4edda;
+        color: #155724;
+      }
+      .disconnected {
+        background: #f8d7da;
+        color: #721c24;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>🤖 CyberBot Controller</h1>
+    <p>
+      Status: <span id="status" class="status disconnected">Connecting...</span>
+    </p>
+
+    <div class="angle-display">Angle: <span id="angle">0.00</span>°</div>
+
+    <div class="controls">
+      <button onmousedown="send('FWD')" onmouseup="send('STOP')">FORWARD</button
+      ><br />
+      <button onmousedown="send('ROTL')" onmouseup="send('STOP')">
+        ROTATE L
+      </button>
+      <button
+        onmousedown="send('STOP')"
+        style="background: #ff4444; color: white"
+      >
+        STOP
+      </button>
+      <button onmousedown="send('ROTR')" onmouseup="send('STOP')">
+        ROTATE R</button
+      ><br />
+      <button onmousedown="send('BWD')" onmouseup="send('STOP')">
+        BACKWARD
+      </button>
+    </div>
+
+    <script>
+      // เปลี่ยน IP ให้ตรงกับ ESP32 ของคุณ
+      const socket = new WebSocket("ws://192.168.88.115:81");
+
+      socket.onopen = function () {
+        console.log("Connected to WebSocket");
+        const statusLabel = document.getElementById("status");
+        statusLabel.innerText = "Connected";
+        statusLabel.className = "status connected";
+      };
+
+      socket.onclose = function () {
+        console.log("Disconnected from WebSocket");
+        const statusLabel = document.getElementById("status");
+        statusLabel.innerText = "Disconnected";
+        statusLabel.className = "status disconnected";
+      };
+
+      socket.onerror = function (error) {
+        console.error("WebSocket Error: ", error);
+      };
+
+      socket.onmessage = function (event) {
+        try {
+          const data = JSON.parse(event.data);
+
+          // แยกประเภทข้อมูล
+          if (data.type === "data") {
+            // ข้อมูลมุม (Angle)
+            document.getElementById("angle").innerText = data.angle.toFixed(2);
+          } else if (data.type === "ack") {
+            // Feedback จากคำสั่ง (ACK)
+            console.log("Server Confirm:", data.cmd, data.status);
+            // อาจจะทำไฟกระพริบสีเขียวที่ปุ่ม เพื่อบอก User ว่าคำสั่งไปถึงแล้ว
+          }
+        } catch (e) {
+          console.log("Non-JSON:", event.data);
+        }
+      };
+
+      function send(cmd) {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(cmd);
+          console.log("Sent command: " + cmd);
+        } else {
+          console.warn("WebSocket is not open. State: " + socket.readyState);
+        }
+      }
+    </script>
+  </body>
+</html>
