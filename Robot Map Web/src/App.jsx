@@ -582,7 +582,7 @@ export default function App() {
       }
     };
 
-    
+
     const onKeyUp = (e) => {
       if (isTypingTarget(e.target)) return;
 
@@ -716,6 +716,13 @@ export default function App() {
         setWsConnected(true);
       };
 
+      // Heartbeat: Send "H" every 100ms
+      const heartbeatInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send("H");
+        }
+      }, 100);
+
       ws.onmessage = (event) => {
         try {
           const j = JSON.parse(event.data);
@@ -733,6 +740,7 @@ export default function App() {
         console.log("WS-CMD: Closed, reconnecting...");
         setWsConnected(false);
         wsCmdRef.current = null;
+        clearInterval(heartbeatInterval);
         reconnectTimeout = setTimeout(connectWsCmd, 2000);
       };
 
