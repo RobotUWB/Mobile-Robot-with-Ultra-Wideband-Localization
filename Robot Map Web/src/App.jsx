@@ -5,38 +5,18 @@ const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 
 const Icons = {
   Play: () => (
-    <svg
-      width="16"
-      height="16"
-      fill="currentColor"
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-    >
+    <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
       <path d="M5 3l14 9-14 9V3z" />
     </svg>
   ),
   Pause: () => (
-    <svg
-      width="16"
-      height="16"
-      fill="currentColor"
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-    >
+    <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
       <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
     </svg>
   ),
 
   Wifi: () => (
-    <svg
-      width="16"
-      height="16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-    >
+    <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
       <path d="M5 12.55a11 11 0 0114.08 0M1.64 9a15 15 0 0120.72 0M8.27 16a6 6 0 017.46 0M12 20h.01" />
     </svg>
   ),
@@ -255,20 +235,8 @@ export default function App() {
   const [refY, setRefY] = useState("");
   const [calState, setCalState] = useState(0); // 0..4 from ESP32 json.cs
 
-  const CAL_TEXT = [
-    "READY",
-    "CALIBRATING...",
-    "SUCCESS!",
-    "FAILED",
-    "RESET DONE",
-  ];
-  const CAL_COLOR = [
-    "var(--muted)",
-    "var(--warning)",
-    "var(--success)",
-    "var(--danger)",
-    "var(--accent)",
-  ];
+  const CAL_TEXT = ["READY", "CALIBRATING...", "SUCCESS!", "FAILED", "RESET DONE"];
+  const CAL_COLOR = ["var(--muted)", "var(--warning)", "var(--success)", "var(--danger)", "var(--accent)"];
 
   /* --- State: Canvas & Data --- */
   const canvasRef = useRef(null);
@@ -344,7 +312,7 @@ export default function App() {
       const res = await fetch(CMD_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cmd }), // ✅ ESP32 ต้องการ {cmd:"FWD"} แบบนี้
+        body: JSON.stringify({ cmd }),   // ✅ ESP32 ต้องการ {cmd:"FWD"} แบบนี้
         cache: "no-store",
       });
 
@@ -357,6 +325,7 @@ export default function App() {
     }
   };
 
+
   // ===== Calibration Actions (GET endpoints like friend's ESP32) =====
   const calT1 = async () => {
     const x = parseFloat(refX);
@@ -367,9 +336,7 @@ export default function App() {
     }
 
     try {
-      const url = api(
-        `/cal?x=${encodeURIComponent(x)}&y=${encodeURIComponent(y)}`,
-      );
+      const url = api(`/cal?x=${encodeURIComponent(x)}&y=${encodeURIComponent(y)}`);
       const r = await fetch(url);
       if (!r.ok) throw new Error("CAL failed");
       showToast("CAL T1 started", "success");
@@ -378,6 +345,7 @@ export default function App() {
       showToast("CAL T1 failed (check /cal endpoint)", "error");
     }
   };
+
 
   const saveT1 = async () => {
     try {
@@ -416,14 +384,6 @@ export default function App() {
   const [driveKey, setDriveKey] = useState(null); // 'W', 'A', 'S', 'D' or null
   const [rotKey, setRotKey] = useState(null);     // 'Q', 'E' or null
 
-  useEffect(() => {
-    driveKeyRef.current = driveKey;
-  }, [driveKey]);
-  useEffect(() => {
-    rotKeyRef.current = rotKey;
-  }, [rotKey]);
-
-  const pressedOrderRef = useRef([]); // เก็บลำดับปุ่มที่ค้าง (อันล่าสุดมี priority)
   const [stopHeld, setStopHeld] = useState(false);
   const stopHeldRef = useRef(false);
 
@@ -662,6 +622,7 @@ export default function App() {
     };
   }, []);
 
+
   /* --- HTTP Polling for UWB Data + Heading --- */
   useEffect(() => {
     const pollData = async () => {
@@ -677,24 +638,20 @@ export default function App() {
         // Position
         const xVal = Number(j.x);
         const yVal = Number(j.y);
-        const tag1Ok =
-          Number.isFinite(xVal) &&
-          Number.isFinite(yVal) &&
-          xVal !== -1 &&
-          yVal !== -1;
+        const tag1Ok = Number.isFinite(xVal) && Number.isFinite(yVal) && xVal !== -1 && yVal !== -1;
 
         if (tag1Ok) {
-          const xs = anchorsRef.current.map((a) => a.x_mm);
-          const ys = anchorsRef.current.map((a) => a.y_mm);
+          const xs = anchorsRef.current.map(a => a.x_mm);
+          const ys = anchorsRef.current.map(a => a.y_mm);
           const minX = Math.min(...xs);
           const maxX = Math.max(...xs);
           const minY = Math.min(...ys);
           const maxY = Math.max(...ys);
 
-          setPose((prev) => ({
+          setPose(prev => ({
             x_mm: clamp(xVal * 1000, minX, maxX),
             y_mm: clamp(yVal * 1000, minY, maxY),
-            yaw: prev.yaw,
+            yaw: prev.yaw
           }));
         }
 
@@ -727,6 +684,7 @@ export default function App() {
           }));
           if (newAnchors.length >= 3) setAnchors(newAnchors);
         }
+
       } catch (err) {
         missedHeartbeatsRef.current += 1;
         if (missedHeartbeatsRef.current >= 10) setConnected(false);
@@ -747,19 +705,11 @@ export default function App() {
     let reconnectTimeout = null;
 
     const connectWsCmd = () => {
-      if (wsCmdRef.current && wsCmdRef.current.readyState === WebSocket.OPEN)
-        return;
+      if (wsCmdRef.current && wsCmdRef.current.readyState === WebSocket.OPEN) return;
 
       console.log("WS-CMD: Connecting to", CMD_WS_URL);
       const ws = new WebSocket(CMD_WS_URL);
       wsCmdRef.current = ws;
-
-      // Heartbeat Interval (PING)
-      const pingInterval = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send("PING");
-        }
-      }, 100);
 
       ws.onopen = () => {
         console.log("WS-CMD: Connected");
@@ -768,14 +718,11 @@ export default function App() {
 
       ws.onmessage = (event) => {
         try {
-          // Ignore PONG for now (or use it to measure latency)
-          if (event.data === "PONG") return;
-
           const j = JSON.parse(event.data);
           // Expect format: {"angle": 45.5}
           const angle = Number(j.angle);
           if (Number.isFinite(angle)) {
-            setPose((prev) => ({ ...prev, yaw: angle }));
+            setPose(prev => ({ ...prev, yaw: angle }));
           }
         } catch (e) {
           console.error("WS-CMD parse error:", e);
@@ -786,7 +733,6 @@ export default function App() {
         console.log("WS-CMD: Closed, reconnecting...");
         setWsConnected(false);
         wsCmdRef.current = null;
-        clearInterval(pingInterval); // Stop pinging
         reconnectTimeout = setTimeout(connectWsCmd, 2000);
       };
 
@@ -835,22 +781,14 @@ export default function App() {
           maxY = -Infinity;
 
         for (const a of anchorsList) {
-          if (typeof a.x_mm !== "number" || typeof a.y_mm !== "number")
-            continue;
+          if (typeof a.x_mm !== "number" || typeof a.y_mm !== "number") continue;
           minX = Math.min(minX, a.x_mm);
           maxX = Math.max(maxX, a.x_mm);
           minY = Math.min(minY, a.y_mm);
           maxY = Math.max(maxY, a.y_mm);
         }
 
-        if (
-          isFinite(minX) &&
-          isFinite(maxX) &&
-          isFinite(minY) &&
-          isFinite(maxY) &&
-          minX !== maxX &&
-          minY !== maxY
-        ) {
+        if (isFinite(minX) && isFinite(maxX) && isFinite(minY) && isFinite(maxY) && minX !== maxX && minY !== maxY) {
           return { minX, maxX, minY, maxY };
         }
       }
@@ -1016,9 +954,7 @@ export default function App() {
         ctx.fill();
 
         if (show) {
-          ctx.strokeStyle = isOnline
-            ? "rgba(22,163,74,0.30)"
-            : "rgba(148,163,184,0.20)";
+          ctx.strokeStyle = isOnline ? "rgba(22,163,74,0.30)" : "rgba(148,163,184,0.20)";
           ctx.lineWidth = 1;
 
           ctx.beginPath();
@@ -1043,13 +979,7 @@ export default function App() {
         const p1 = toPx(t1.x_mm, t1.y_mm, cx, cy, s, bounds);
 
         // วาดหุ่นแบบหมุนได้ (0 องศา = หันซ้าย)
-        drawRobot(
-          p1.px,
-          p1.py,
-          10,
-          COLORS.tag1,
-          (t1.yaw || 0) - yawOffsetRef.current,
-        );
+        drawRobot(p1.px, p1.py, 10, COLORS.tag1, (t1.yaw || 0) - yawOffsetRef.current);
         if (show) drawTagLabel("Robot UWB", p1.px, p1.py, true);
 
         // XY label (Tag1)
@@ -1099,10 +1029,8 @@ export default function App() {
         ctx.lineWidth = 1;
         ctx.setLineDash([4, 4]);
         ctx.beginPath();
-        ctx.moveTo(mx, 0);
-        ctx.lineTo(mx, H);
-        ctx.moveTo(0, my);
-        ctx.lineTo(W, my);
+        ctx.moveTo(mx, 0); ctx.lineTo(mx, H);
+        ctx.moveTo(0, my); ctx.lineTo(W, my);
         ctx.stroke();
         ctx.setLineDash([]);
 
@@ -1125,6 +1053,7 @@ export default function App() {
 
         ctx.restore();
       }
+
 
       raf = requestAnimationFrame(draw);
     };
@@ -1210,25 +1139,9 @@ export default function App() {
             </div>
 
             <div>
-              <h1
-                style={{
-                  margin: 0,
-                  fontSize: 18,
-                  fontWeight: 700,
-                  letterSpacing: 0.2,
-                }}
-              >
-                UWB Localization
-              </h1>
+              <h1 style={{ margin: 0, fontSize: 18, fontWeight: 700, letterSpacing: 0.2 }}>UWB Localization</h1>
 
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  marginTop: 4,
-                }}
-              >
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
                 <div
                   style={{
                     width: 8,
@@ -1237,13 +1150,7 @@ export default function App() {
                     background: connected ? "var(--success)" : "var(--danger)",
                   }}
                 />
-                <span
-                  style={{
-                    fontSize: 13,
-                    color: connected ? "var(--success)" : "var(--danger)",
-                    fontWeight: 700,
-                  }}
-                >
+                <span style={{ fontSize: 13, color: connected ? "var(--success)" : "var(--danger)", fontWeight: 700 }}>
                   {connected ? "ONLINE" : "DISCONNECTED"}
                 </span>
               </div>
@@ -1251,23 +1158,11 @@ export default function App() {
           </div>
 
           <div style={{ display: "flex", gap: 22, alignItems: "center" }}>
-            <Metric
-              label="COORD X"
-              value={(pose.x_mm / 1000).toFixed(2)}
-              unit="m"
-            />
+            <Metric label="COORD X" value={(pose.x_mm / 1000).toFixed(2)} unit="m" />
             <Divider />
-            <Metric
-              label="COORD Y"
-              value={(pose.y_mm / 1000).toFixed(2)}
-              unit="m"
-            />
+            <Metric label="COORD Y" value={(pose.y_mm / 1000).toFixed(2)} unit="m" />
             <Divider />
-            <Metric
-              label="HEADING"
-              value={((pose.yaw || 0) - yawOffset).toFixed(1)}
-              unit="°"
-            />
+            <Metric label="HEADING" value={((pose.yaw || 0) - yawOffset).toFixed(1)} unit="°" />
             <Divider />
             <Metric
               label="RMSE"
@@ -1278,14 +1173,7 @@ export default function App() {
         </header>
 
         {/* Main Grid */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "300px 1fr",
-            gap: 16,
-            flex: 1,
-          }}
-        >
+        <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 16, flex: 1 }}>
           {/* Left Sidebar */}
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             {/* Anchors + Calibration */}
@@ -1296,78 +1184,27 @@ export default function App() {
                 {Object.entries(ranges).map(([k, v]) => (
                   <div
                     key={k}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                    }}
+                    style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
                   >
-                    <span
-                      style={{
-                        color: "#ffffff",
-                        fontSize: 14,
-                        fontWeight: 700,
-                      }}
-                    >
-                      {k}
-                    </span>
-                    <span
-                      className="mono"
-                      style={{ fontSize: 13, color: "#ffffff" }}
-                    >
+                    <span style={{ color: "#ffffff", fontSize: 14, fontWeight: 700 }}>{k}</span>
+                    <span className="mono" style={{ fontSize: 13, color: "#ffffff" }}>
                       {v.toFixed(2)}m
                     </span>
                   </div>
                 ))}
               </div>
 
-              <div
-                style={{
-                  marginTop: 14,
-                  paddingTop: 14,
-                  borderTop: "1px solid var(--border)",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    marginBottom: 10,
-                  }}
-                >
-                  <div className="panelTitle" style={{ margin: 0 }}>
-                    Tag1 calibration
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 12,
-                      fontWeight: 800,
-                      color: CAL_COLOR[calState] || "var(--muted)",
-                    }}
-                  >
+              <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <div className="panelTitle" style={{ margin: 0 }}>Tag1 calibration</div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: CAL_COLOR[calState] || "var(--muted)" }}>
                     {CAL_TEXT[calState] || "READY"}
                   </div>
                 </div>
 
                 <div style={{ display: "grid", gap: 10 }}>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      flexWrap: "wrap",
-                    }}
-                  >
-                    <span
-                      style={{
-                        fontSize: 12,
-                        color: "var(--muted)",
-                        fontWeight: 800,
-                      }}
-                    >
-                      REF
-                    </span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 12, color: "var(--muted)", fontWeight: 800 }}>REF</span>
 
                     <input
                       className="cal-in"
@@ -1390,23 +1227,12 @@ export default function App() {
                     />
                   </div>
 
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      flexWrap: "wrap",
-                    }}
-                  >
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                     <button
                       onClick={calT1}
                       disabled={!connected}
                       className="btn btnPrimary"
-                      style={{
-                        height: 34,
-                        padding: "0 12px",
-                        borderRadius: 10,
-                      }}
+                      style={{ height: 34, padding: "0 12px", borderRadius: 10 }}
                     >
                       CAL
                     </button>
@@ -1415,11 +1241,7 @@ export default function App() {
                       onClick={calDirection}
                       disabled={!connected}
                       className="btn btnNeutral"
-                      style={{
-                        height: 34,
-                        padding: "0 12px",
-                        borderRadius: 10,
-                      }}
+                      style={{ height: 34, padding: "0 12px", borderRadius: 10 }}
                       title="Set Current Direction as 0 (Front)"
                     >
                       CAL DIR
@@ -1429,11 +1251,7 @@ export default function App() {
                       onClick={saveT1}
                       disabled={!connected}
                       className="btn btnSuccess"
-                      style={{
-                        height: 34,
-                        padding: "0 12px",
-                        borderRadius: 10,
-                      }}
+                      style={{ height: 34, padding: "0 12px", borderRadius: 10 }}
                     >
                       SAVE
                     </button>
@@ -1442,25 +1260,14 @@ export default function App() {
                       onClick={resetT1}
                       disabled={!connected}
                       className="btn btnNeutral"
-                      style={{
-                        height: 34,
-                        padding: "0 12px",
-                        borderRadius: 10,
-                      }}
+                      style={{ height: 34, padding: "0 12px", borderRadius: 10 }}
                     >
                       RESET
                     </button>
                   </div>
                 </div>
 
-                <div
-                  style={{
-                    marginTop: 10,
-                    fontSize: 12,
-                    color: "var(--muted)",
-                    lineHeight: 1.35,
-                  }}
-                />
+                <div style={{ marginTop: 10, fontSize: 12, color: "var(--muted)", lineHeight: 1.35 }} />
               </div>
             </div>
 
@@ -1468,14 +1275,8 @@ export default function App() {
             <div className="panel" style={{ padding: 16 }}>
               <div className="panelTitle">Manual drive (test)</div>
 
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(3, 60px)",
-                  gap: 8,
-                  justifyContent: "center",
-                }}
-              >
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 60px)", gap: 8, justifyContent: "center" }}>
+
                 {/* Q */}
                 <button
                   className={`btn ${rotKey === "Q" ? "btnPrimary" : "btnNeutral"}`}
@@ -1537,33 +1338,22 @@ export default function App() {
                 </button>
               </div>
 
-              <div
-                style={{
-                  marginTop: 12,
-                  display: "flex",
-                  gap: 10,
-                  alignItems: "center",
-                }}
-              >
+
+              <div style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center" }}>
                 <KeyBtn
                   label="STOP"
                   wide
                   danger
-                  active={stopHeld} // ✅ ให้มีสถานะกดค้างเหมือนปุ่มอื่น
+                  active={stopHeld}              // ✅ ให้มีสถานะกดค้างเหมือนปุ่มอื่น
                   disabled={!connected}
-                  onDown={stopHoldPress} // ✅ กดค้าง
-                  onUp={stopHoldRelease} // ✅ ปล่อยแล้ว resume ถ้ามีปุ่มค้างอยู่
+                  onDown={stopHoldPress}         // ✅ กดค้าง
+                  onUp={stopHoldRelease}         // ✅ ปล่อยแล้ว resume ถ้ามีปุ่มค้างอยู่
                 />
               </div>
 
-              <div
-                style={{
-                  marginTop: 10,
-                  fontSize: 12,
-                  color: "var(--muted)",
-                  lineHeight: 1.35,
-                }}
-              ></div>
+              <div style={{ marginTop: 10, fontSize: 12, color: "var(--muted)", lineHeight: 1.35 }}>
+
+              </div>
             </div>
 
             {/* Controls (ล่างสุด) ✅ ต้องมี div ครอบ ไม่งั้น </div> จะเพี้ยน */}
@@ -1584,9 +1374,7 @@ export default function App() {
                   width: "100%",
                   padding: 14,
                   borderRadius: 12,
-                  background: isPaused
-                    ? "rgba(22,163,74,0.20)"
-                    : "rgba(255,255,255,0.04)",
+                  background: isPaused ? "rgba(22,163,74,0.20)" : "rgba(255,255,255,0.04)",
                   borderColor: "var(--border)",
                 }}
               >
@@ -1620,60 +1408,24 @@ export default function App() {
           </div>
 
           {/* Right: Visualization */}
-          <div
-            className="panel"
-            style={{
-              padding: 0,
-              position: "relative",
-              overflow: "hidden",
-              display: "flex",
-              flexDirection: "column",
-            }}
-          >
+          <div className="panel" style={{ padding: 0, position: "relative", overflow: "hidden", display: "flex", flexDirection: "column" }}>
             {/* Map Toolbar */}
-            <div
-              style={{
-                position: "absolute",
-                top: 12,
-                right: 12,
-                display: "flex",
-                gap: 8,
-                zIndex: 10,
-              }}
-            >
+            <div style={{ position: "absolute", top: 12, right: 12, display: "flex", gap: 8, zIndex: 10 }}>
               <button
                 onClick={() => setShowTags(!showTags)}
                 className="btn btnGhost"
-                style={{
-                  height: 36,
-                  padding: "0 12px",
-                  borderRadius: 10,
-                  fontSize: 12,
-                }}
+                style={{ height: 36, padding: "0 12px", borderRadius: 10, fontSize: 12 }}
               >
                 {showTags ? "Hide tags" : "Show tags"}
               </button>
             </div>
 
             {/* Canvas */}
-            <div
-              style={{
-                flex: 1,
-                background: "var(--surface2)",
-                position: "relative",
-              }}
-            >
+            <div style={{ flex: 1, background: "var(--surface2)", position: "relative" }}>
               <canvas
                 ref={canvasRef}
-                width={1200}
-                height={700}
-                style={{
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "contain",
-                  display: "block",
-                  touchAction: "none",
-                }}
+                width={1200} height={700}
+                style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", touchAction: "none" }}
                 onPointerMove={(e) => {
                   const rect = e.target.getBoundingClientRect();
                   const scaleX = e.target.width / rect.width;
@@ -1681,7 +1433,7 @@ export default function App() {
                   mouseRef.current = {
                     x: (e.clientX - rect.left) * scaleX,
                     y: (e.clientY - rect.top) * scaleY,
-                    active: true,
+                    active: true
                   };
                 }}
                 onPointerLeave={() => {
@@ -1701,46 +1453,16 @@ export default function App() {
                 background: "var(--surface)",
               }}
             >
-              <span
-                style={{ fontSize: 13, color: "var(--muted)", fontWeight: 700 }}
-              >
-                MAP VIEW: {(scale * 100).toFixed(0)}%
-              </span>
+              <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 700 }}>MAP VIEW: {(scale * 100).toFixed(0)}%</span>
 
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  width: 240,
-                }}
-              >
-                <button
-                  className="btn btnGhost"
-                  style={{ height: 30, width: 34, borderRadius: 10 }}
-                  onClick={() =>
-                    setScale((s) => Math.max(ZOOM_MIN, s - ZOOM_STEP))
-                  }
-                >
+              <div style={{ display: "flex", alignItems: "center", gap: 10, width: 240 }}>
+                <button className="btn btnGhost" style={{ height: 30, width: 34, borderRadius: 10 }} onClick={() => setScale((s) => Math.max(ZOOM_MIN, s - ZOOM_STEP))}>
                   −
                 </button>
 
-                <input
-                  type="range"
-                  min={ZOOM_MIN}
-                  max={ZOOM_MAX}
-                  step={ZOOM_STEP}
-                  value={scale}
-                  onChange={(e) => setScale(parseFloat(e.target.value))}
-                />
+                <input type="range" min={ZOOM_MIN} max={ZOOM_MAX} step={ZOOM_STEP} value={scale} onChange={(e) => setScale(parseFloat(e.target.value))} />
 
-                <button
-                  className="btn btnGhost"
-                  style={{ height: 30, width: 34, borderRadius: 10 }}
-                  onClick={() =>
-                    setScale((s) => Math.min(ZOOM_MAX, s + ZOOM_STEP))
-                  }
-                >
+                <button className="btn btnGhost" style={{ height: 30, width: 34, borderRadius: 10 }} onClick={() => setScale((s) => Math.min(ZOOM_MAX, s + ZOOM_STEP))}>
                   +
                 </button>
               </div>
@@ -1753,49 +1475,18 @@ export default function App() {
 }
 
 /* ================== SUB COMPONENTS ================== */
-const Divider = () => (
-  <div style={{ width: 1, height: 34, background: "var(--border)" }} />
-);
+const Divider = () => <div style={{ width: 1, height: 34, background: "var(--border)" }} />;
 
 const Metric = ({ label, value, unit }) => (
   <div>
-    <div
-      style={{
-        fontSize: 11,
-        fontWeight: 700,
-        color: "var(--muted)",
-        letterSpacing: 0.5,
-        marginBottom: 4,
-      }}
-    >
-      {label}
-    </div>
-    <div
-      style={{
-        fontSize: 22,
-        fontWeight: 500,
-        fontFamily: "'JetBrains Mono', monospace",
-        color: "var(--text)",
-      }}
-    >
+    <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", letterSpacing: 0.5, marginBottom: 4 }}>{label}</div>
+    <div style={{ fontSize: 22, fontWeight: 500, fontFamily: "'JetBrains Mono', monospace", color: "var(--text)" }}>
       {value}
-      {unit ? (
-        <span style={{ fontSize: 13, color: "var(--muted)", marginLeft: 4 }}>
-          {unit}
-        </span>
-      ) : null}
+      {unit ? <span style={{ fontSize: 13, color: "var(--muted)", marginLeft: 4 }}>{unit}</span> : null}
     </div>
   </div>
 );
-const KeyBtn = ({
-  label,
-  active,
-  disabled,
-  onDown,
-  onUp,
-  wide = false,
-  danger = false,
-}) => {
+const KeyBtn = ({ label, active, disabled, onDown, onUp, wide = false, danger = false }) => {
   const baseBg = danger ? "rgba(220,38,38,0.20)" : "rgba(255,255,255,0.04)";
   const activeBg = danger ? "rgba(220,38,38,0.35)" : "rgba(59,130,246,0.22)";
 
