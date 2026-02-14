@@ -279,6 +279,7 @@ export default function App() {
   const [ranges, setRanges] = useState({ A1: 0, A2: 0, A3: 0, A4: 0 });
 
   // WebSocket for Control
+  const isMounted = useRef(true);
   const wsCmdRef = useRef(null);
   const [wsConnected, setWsConnected] = useState(false);
 
@@ -643,14 +644,20 @@ export default function App() {
 
   /* --- WebSocket for UWB Data (Position + Anchors) --- */
   useEffect(() => {
+    isMounted.current = true;
     let uwbReconnectTimeout = null;
 
     const connectWsUwb = () => {
+      if (!isMounted.current) return;
       console.log("WS-UWB: Connecting to", UWB_WS_URL);
       const ws = new WebSocket(UWB_WS_URL);
       uwbWsRef.current = ws;
 
       ws.onopen = () => {
+        if (!isMounted.current) {
+          ws.close();
+          return;
+        }
         console.log("WS-UWB: Connected");
         setConnected(true);
         missedHeartbeatsRef.current = 0;
@@ -697,9 +704,9 @@ export default function App() {
             setRanges(newRanges);
           }
 
-          // Calibration state
+          // Calibration state (cs)
           const cs = Number(j.cs);
-          if (Number.isFinite(cs)) setCalState(Math.max(0, Math.min(4, cs)));
+          if (Number.isFinite(cs)) setCalState(cs);
 
           // RMSE
           const r = Number(j.rmse);
@@ -720,6 +727,7 @@ export default function App() {
       };
 
       ws.onclose = () => {
+        if (!isMounted.current) return;
         console.log("WS-UWB: Closed, reconnecting...");
         setConnected(false);
         uwbReconnectTimeout = setTimeout(connectWsUwb, 2000);
@@ -734,15 +742,22 @@ export default function App() {
     connectWsUwb();
 
     return () => {
+      isMounted.current = false;
       if (uwbReconnectTimeout) clearTimeout(uwbReconnectTimeout);
+      if (uwbWsRef.current) {
+        uwbWsRef.current.onclose = null; // Prevent re-triggering cleanup logic
+        uwbWsRef.current.close();
+      }
     };
   }, []);
 
   /* --- WebSocket for Robot Control (Heading + Commands) --- */
   useEffect(() => {
     let reconnectTimeout = null;
+    let heartbeatInterval = null;
 
     const connectWsCmd = () => {
+      if (!isMounted.current) return;
       if (wsCmdRef.current && wsCmdRef.current.readyState === WebSocket.OPEN)
         return;
 
@@ -750,46 +765,43 @@ export default function App() {
       const ws = new WebSocket(CMD_WS_URL);
       wsCmdRef.current = ws;
 
-      // Heartbeat Interval (PING)
-      const pingInterval = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send("PING");
-        }
-      }, 100);
-
       ws.onopen = () => {
+        if (!isMounted.current) {
+          ws.close();
+          return;
+        }
         console.log("WS-CMD: Connected");
         setWsConnected(true);
-      };
 
-      // Heartbeat: Send "H" every 100ms
-      const heartbeatInterval = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send("H");
-        }
-      }, 100);
+        // Consolidated heartbeat: Send "PING" to reset timeout & "H" for heartbeat
+        // WEB_TIMEOUT_MS on ESP32 is 300ms, so we send every 100ms
+        heartbeatInterval = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send("PING");
+            ws.send("H");
+          }
+        }, 100);
+      };
 
       ws.onmessage = (event) => {
         try {
-          // Ignore PONG for now (or use it to measure latency)
           if (event.data === "PONG") return;
-
           const j = JSON.parse(event.data);
-          // Expect format: {"angle": 45.5}
           const angle = Number(j.angle);
           if (Number.isFinite(angle)) {
             setPose((prev) => ({ ...prev, yaw: angle }));
           }
         } catch (e) {
-          console.error("WS-CMD parse error:", e);
+          // Non-JSON ack messages ignore
         }
       };
 
       ws.onclose = () => {
-        console.log("WS-CMD: Closed, reconnecting...");
         setWsConnected(false);
         wsCmdRef.current = null;
-        clearInterval(heartbeatInterval);
+        if (heartbeatInterval) clearInterval(heartbeatInterval);
+        if (!isMounted.current) return;
+        console.log("WS-CMD: Closed, reconnecting...");
         reconnectTimeout = setTimeout(connectWsCmd, 2000);
       };
 
@@ -803,7 +815,11 @@ export default function App() {
 
     return () => {
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
-      if (wsCmdRef.current) wsCmdRef.current.close();
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
+      if (wsCmdRef.current) {
+        wsCmdRef.current.onclose = null;
+        wsCmdRef.current.close();
+      }
     };
   }, []);
 
