@@ -416,14 +416,6 @@ export default function App() {
   const [driveKey, setDriveKey] = useState(null); // 'W', 'A', 'S', 'D' or null
   const [rotKey, setRotKey] = useState(null);     // 'Q', 'E' or null
 
-  useEffect(() => {
-    driveKeyRef.current = driveKey;
-  }, [driveKey]);
-  useEffect(() => {
-    rotKeyRef.current = rotKey;
-  }, [rotKey]);
-
-  const pressedOrderRef = useRef([]); // เก็บลำดับปุ่มที่ค้าง (อันล่าสุดมี priority)
   const [stopHeld, setStopHeld] = useState(false);
   const stopHeldRef = useRef(false);
 
