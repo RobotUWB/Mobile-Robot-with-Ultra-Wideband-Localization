@@ -1,0 +1,463 @@
+import React, { useEffect, useRef } from "react";
+
+const MapCanvas = ({
+    anchors,
+    ranges,
+    pose,
+    yawOffset,
+    showTags,
+    setShowTags,
+    scale,
+    setScale,
+    ZOOM_MIN,
+    ZOOM_MAX,
+    ZOOM_STEP,
+    FIELD_W,
+    FIELD_H,
+}) => {
+    const canvasRef = useRef(null);
+    const mouseRef = useRef({ x: 0, y: 0, active: false });
+
+    // Refs for Animation Loop to avoid dependency staleness
+    const scaleRef = useRef(scale);
+    const poseRef = useRef(pose);
+    const anchorsRef = useRef(anchors);
+    const showTagsRef = useRef(showTags);
+    const rangesRef = useRef(ranges);
+    const yawOffsetRef = useRef(yawOffset);
+
+    // Sync Refs with Props
+    useEffect(() => { scaleRef.current = scale; }, [scale]);
+    useEffect(() => { anchorsRef.current = anchors; }, [anchors]);
+    useEffect(() => { showTagsRef.current = showTags; }, [showTags]);
+    useEffect(() => { rangesRef.current = ranges; }, [ranges]);
+    useEffect(() => { poseRef.current = pose; }, [pose]);
+    useEffect(() => { yawOffsetRef.current = yawOffset; }, [yawOffset]);
+
+    /* --- Canvas Drawing (ลด glow/ความ neon ให้ดูคนทำ) --- */
+    useEffect(() => {
+        const cvs = canvasRef.current;
+        if (!cvs) return;
+        const ctx = cvs.getContext("2d");
+        let raf;
+
+        const COLORS = {
+            bg: "#0f172a",
+            grid: "rgba(255,255,255,0.05)",
+            boundary: "rgba(59,130,246,0.35)",
+            anchorOn: "#16a34a",
+            anchorOff: "#64748b",
+            tag1: "#3b82f6",
+
+            labelBg: "rgba(17,26,43,0.92)",
+            labelBd: "rgba(255,255,255,0.10)",
+            text: "#e5e7eb",
+            muted: "#9ca3af",
+        };
+
+        const mmToPx = (mm, s) => mm * s;
+
+        const getBoundsFromAnchors = (anchorsList) => {
+            if (anchorsList && anchorsList.length) {
+                let minX = Infinity,
+                    maxX = -Infinity,
+                    minY = Infinity,
+                    maxY = -Infinity;
+
+                for (const a of anchorsList) {
+                    if (typeof a.x_mm !== "number" || typeof a.y_mm !== "number")
+                        continue;
+                    minX = Math.min(minX, a.x_mm);
+                    maxX = Math.max(maxX, a.x_mm);
+                    minY = Math.min(minY, a.y_mm);
+                    maxY = Math.max(maxY, a.y_mm);
+                }
+
+                if (
+                    isFinite(minX) &&
+                    isFinite(maxX) &&
+                    isFinite(minY) &&
+                    isFinite(maxY) &&
+                    minX !== maxX &&
+                    minY !== maxY
+                ) {
+                    return { minX, maxX, minY, maxY };
+                }
+            }
+            return { minX: 0, maxX: FIELD_W, minY: 0, maxY: FIELD_H };
+        };
+
+        const toPx = (x_mm, y_mm, cx, cy, s, bounds) => {
+            const midX = (bounds.minX + bounds.maxX) / 2;
+            const midY = (bounds.minY + bounds.maxY) / 2;
+            return {
+                px: cx + mmToPx(x_mm - midX, s),
+                py: cy + mmToPx(midY - y_mm, s),
+            };
+        };
+        const drawRobot = (x, y, size, color, yawDeg) => {
+            ctx.save();
+            ctx.translate(x, y);
+            // ชดเชยให้ 0 องศาหันไปทาง "ซ้าย" (Front) และทวนเข็มตามค่า IMU
+            const angleRad = ((180 - yawDeg) * Math.PI) / 180;
+            ctx.rotate(angleRad);
+
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.moveTo(size * 1.5, 0);
+            ctx.lineTo(-size, size);
+            ctx.lineTo(-size, -size);
+            ctx.closePath();
+            ctx.fill();
+
+            ctx.strokeStyle = "rgba(255,255,255,0.9)";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.restore();
+        };
+
+        const drawTagLabel = (text, x, y, above = true) => {
+            ctx.save();
+            ctx.font = "600 12px Inter";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+
+            const padX = 10;
+            const h = 22;
+            const w = ctx.measureText(text).width + padX * 2;
+            const bx = x - w / 2;
+            const by = above ? y - 26 - h : y + 26;
+
+            ctx.fillStyle = COLORS.labelBg;
+            ctx.strokeStyle = COLORS.labelBd;
+            ctx.lineWidth = 1;
+
+            ctx.beginPath();
+            ctx.roundRect(bx, by, w, h, 8);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.fillStyle = COLORS.text;
+            ctx.fillText(text, x, by + h / 2);
+            ctx.restore();
+        };
+
+        const draw = () => {
+            const W = cvs.width,
+                H = cvs.height;
+            const cx = W / 2,
+                cy = H / 2;
+            const s = scaleRef.current;
+            const show = showTagsRef.current;
+            const currentRanges = rangesRef.current;
+            const anchorsNow = anchorsRef.current || [];
+            const bounds = getBoundsFromAnchors(anchorsNow);
+
+            // Clear
+            ctx.fillStyle = COLORS.bg;
+            ctx.fillRect(0, 0, W, H);
+
+            // Grid
+            ctx.strokeStyle = COLORS.grid;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            const STEP = 500;
+
+            const xStart = Math.floor(bounds.minX / STEP) * STEP;
+            const xEnd = Math.ceil(bounds.maxX / STEP) * STEP;
+            for (let x = xStart; x <= xEnd; x += STEP) {
+                let p1 = toPx(x, bounds.minY, cx, cy, s, bounds);
+                let p2 = toPx(x, bounds.maxY, cx, cy, s, bounds);
+                ctx.moveTo(p1.px, p1.py);
+                ctx.lineTo(p2.px, p2.py);
+            }
+
+            const yStart = Math.floor(bounds.minY / STEP) * STEP;
+            const yEnd = Math.ceil(bounds.maxY / STEP) * STEP;
+            for (let y = yStart; y <= yEnd; y += STEP) {
+                let p1 = toPx(bounds.minX, y, cx, cy, s, bounds);
+                let p2 = toPx(bounds.maxX, y, cx, cy, s, bounds);
+                ctx.moveTo(p1.px, p1.py);
+                ctx.lineTo(p2.px, p2.py);
+            }
+            ctx.stroke();
+
+            // Boundary
+            const b1 = toPx(bounds.minX, bounds.minY, cx, cy, s, bounds);
+            const b2 = toPx(bounds.maxX, bounds.minY, cx, cy, s, bounds);
+            const b3 = toPx(bounds.maxX, bounds.maxY, cx, cy, s, bounds);
+            const b4 = toPx(bounds.minX, bounds.maxY, cx, cy, s, bounds);
+
+            ctx.strokeStyle = COLORS.boundary;
+            ctx.setLineDash([8, 8]);
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(b1.px, b1.py);
+            ctx.lineTo(b2.px, b2.py);
+            ctx.lineTo(b3.px, b3.py);
+            ctx.lineTo(b4.px, b4.py);
+            ctx.closePath();
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Anchors
+            for (const a of anchorsRef.current) {
+                const { px, py } = toPx(a.x_mm, a.y_mm, cx, cy, s, bounds);
+
+                const rangeVal = currentRanges[a.id] || 0;
+                const isOnline = rangeVal > 0;
+
+                ctx.fillStyle = isOnline ? COLORS.anchorOn : COLORS.anchorOff;
+                ctx.beginPath();
+                ctx.arc(px, py, isOnline ? 5 : 4, 0, Math.PI * 2);
+                ctx.fill();
+
+                if (show) {
+                    ctx.strokeStyle = isOnline
+                        ? "rgba(22,163,74,0.30)"
+                        : "rgba(148,163,184,0.20)";
+                    ctx.lineWidth = 1;
+
+                    ctx.beginPath();
+                    ctx.arc(px, py, 14, 0, Math.PI * 2);
+                    ctx.stroke();
+
+                    ctx.fillStyle = isOnline ? COLORS.text : COLORS.muted;
+                    ctx.font = "600 13px Inter";
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "alphabetic";
+
+                    const labelText = `${a.id} ${rangeVal.toFixed(2)}m`;
+                    ctx.fillText(labelText, px, py - 18);
+                }
+            }
+
+            // Tag1 (Only)
+            const t1 = poseRef.current;
+
+            const t1Finite = Number.isFinite(t1.x_mm) && Number.isFinite(t1.y_mm);
+            if (t1Finite) {
+                const p1 = toPx(t1.x_mm, t1.y_mm, cx, cy, s, bounds);
+
+                // วาดหุ่นแบบหมุนได้ (0 องศา = หันซ้าย)
+                drawRobot(
+                    p1.px,
+                    p1.py,
+                    10,
+                    COLORS.tag1,
+                    (t1.yaw || 0) - yawOffsetRef.current,
+                );
+                if (show) drawTagLabel("Robot UWB", p1.px, p1.py, true);
+
+                // XY label (Tag1)
+                if (show) {
+                    ctx.save();
+                    ctx.font = "11px JetBrains Mono";
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "alphabetic";
+
+                    const label = `X:${(t1.x_mm / 1000).toFixed(2)} Y:${(t1.y_mm / 1000).toFixed(2)}`;
+                    const tw = ctx.measureText(label).width + 16;
+
+                    ctx.fillStyle = COLORS.labelBg;
+                    ctx.strokeStyle = COLORS.labelBd;
+                    ctx.beginPath();
+                    ctx.roundRect(p1.px - tw / 2, p1.py + 24, tw, 24, 6);
+                    ctx.fill();
+                    ctx.stroke();
+
+                    ctx.fillStyle = COLORS.text;
+                    ctx.fillText(label, p1.px, p1.py + 42);
+                    ctx.restore();
+                }
+            }
+
+            // ✅ Mouse Hover Tooltip
+            if (mouseRef.current.active) {
+                const mx = mouseRef.current.x;
+                const my = mouseRef.current.y;
+
+                // Inverse Calcs
+                const midX = (bounds.minX + bounds.maxX) / 2;
+                const midY = (bounds.minY + bounds.maxY) / 2;
+
+                const mmX = (mx - cx) / s + midX;
+                const mmY = midY - (my - cy) / s;
+
+                const txt = `X:${(mmX / 1000).toFixed(2)} Y:${(mmY / 1000).toFixed(2)}`;
+
+                ctx.save();
+                ctx.font = "600 12px Inter";
+                ctx.textAlign = "left";
+                ctx.textBaseline = "bottom";
+
+                // Draw crosshair
+                ctx.strokeStyle = "rgba(255,255,255,0.3)";
+                ctx.lineWidth = 1;
+                ctx.setLineDash([4, 4]);
+                ctx.beginPath();
+                ctx.moveTo(mx, 0);
+                ctx.lineTo(mx, H);
+                ctx.moveTo(0, my);
+                ctx.lineTo(W, my);
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                // Tooltip
+                const pad = 6;
+                const tw = ctx.measureText(txt).width + pad * 2;
+                const th = 20;
+                const tx = mx + 10;
+                const ty = my - 10;
+
+                ctx.fillStyle = "rgba(0,0,0,0.8)";
+                ctx.strokeStyle = "rgba(255,255,255,0.2)";
+                ctx.beginPath();
+                ctx.roundRect(tx, ty - th, tw, th, 4);
+                ctx.fill();
+                ctx.stroke();
+
+                ctx.fillStyle = "#fff";
+                ctx.fillText(txt, tx + pad, ty - pad + 2);
+
+                ctx.restore();
+            }
+
+            raf = requestAnimationFrame(draw);
+        };
+
+        raf = requestAnimationFrame(draw);
+        return () => cancelAnimationFrame(raf);
+    }, []);
+
+    return (
+        <div
+            className="panel"
+            style={{
+                padding: 0,
+                position: "relative",
+                overflow: "hidden",
+                display: "flex",
+                flexDirection: "column",
+            }}
+        >
+            {/* Map Toolbar */}
+            <div
+                style={{
+                    position: "absolute",
+                    top: 12,
+                    right: 12,
+                    display: "flex",
+                    gap: 8,
+                    zIndex: 10,
+                }}
+            >
+                <button
+                    onClick={() => setShowTags(!showTags)}
+                    className="btn btnGhost"
+                    style={{
+                        height: 36,
+                        padding: "0 12px",
+                        borderRadius: 10,
+                        fontSize: 12,
+                    }}
+                >
+                    {showTags ? "Hide tags" : "Show tags"}
+                </button>
+            </div>
+
+            {/* Canvas */}
+            <div
+                style={{
+                    flex: 1,
+                    background: "var(--surface2)",
+                    position: "relative",
+                }}
+            >
+                <canvas
+                    ref={canvasRef}
+                    width={1200}
+                    height={700}
+                    style={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "contain",
+                        display: "block",
+                        touchAction: "none",
+                    }}
+                    onPointerMove={(e) => {
+                        const rect = e.target.getBoundingClientRect();
+                        const scaleX = e.target.width / rect.width;
+                        const scaleY = e.target.height / rect.height;
+                        mouseRef.current = {
+                            x: (e.clientX - rect.left) * scaleX,
+                            y: (e.clientY - rect.top) * scaleY,
+                            active: true,
+                        };
+                    }}
+                    onPointerLeave={() => {
+                        mouseRef.current.active = false;
+                    }}
+                />
+            </div>
+
+            {/* Zoom Footer */}
+            <div
+                style={{
+                    padding: "12px 14px",
+                    borderTop: "1px solid var(--border)",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    background: "var(--surface)",
+                }}
+            >
+                <span
+                    style={{ fontSize: 13, color: "var(--muted)", fontWeight: 700 }}
+                >
+                    MAP VIEW: {(scale * 100).toFixed(0)}%
+                </span>
+
+                <div
+                    style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        width: 240,
+                    }}
+                >
+                    <button
+                        className="btn btnGhost"
+                        style={{ height: 30, width: 34, borderRadius: 10 }}
+                        onClick={() =>
+                            setScale((s) => Math.max(ZOOM_MIN, s - ZOOM_STEP))
+                        }
+                    >
+                        −
+                    </button>
+
+                    <input
+                        type="range"
+                        min={ZOOM_MIN}
+                        max={ZOOM_MAX}
+                        step={ZOOM_STEP}
+                        value={scale}
+                        onChange={(e) => setScale(parseFloat(e.target.value))}
+                    />
+
+                    <button
+                        className="btn btnGhost"
+                        style={{ height: 30, width: 34, borderRadius: 10 }}
+                        onClick={() =>
+                            setScale((s) => Math.min(ZOOM_MAX, s + ZOOM_STEP))
+                        }
+                    >
+                        +
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export default MapCanvas;

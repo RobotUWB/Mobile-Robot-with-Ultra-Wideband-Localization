@@ -1,4 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
+import SettingsPanel from "./SettingsPanel";
+import Joystick from "./Joystick";
+import MapCanvas from "./MapCanvas";
 
 /* ================== ICONS ================== */
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
@@ -238,11 +241,6 @@ const ROT_CMDS = {
 // หยุดตอนปล่อยปุ่มเดิน (หรือไม่มีปุ่มค้าง)
 const DRIVE_STOP_CMD = "STOP";
 
-// Spacebar behavior:
-// - "STOP"  = กดค้างส่ง STOP (ปล่อยแล้วถ้ายังค้าง WASD จะกลับไปส่งเดินต่อ)
-// - "PAUSE" = กดค้างส่ง PAUSE / ปล่อยส่ง RESUME (แนะนำถ้า STOP เป็น Emergency จริง)
-const SPACE_MODE = "STOP";
-
 /* ================== APP COMPONENT ================== */
 export default function App() {
   // ===== Calibration UI =====
@@ -266,7 +264,6 @@ export default function App() {
   ];
 
   /* --- State: Canvas & Data --- */
-  const canvasRef = useRef(null);
   const [scale, setScale] = useState(0.15);
 
   const [anchors, setAnchors] = useState([
@@ -301,33 +298,14 @@ export default function App() {
   const [toast, setToast] = useState({ show: false, msg: "", type: "info" });
 
   /* --- Refs for Animation Loop --- */
-  const scaleRef = useRef(scale);
-  const poseRef = useRef(pose);
   const anchorsRef = useRef(anchors);
-  const isFetchingRef = useRef(false);
   const missedHeartbeatsRef = useRef(0); // ✅ Heartbeat Counter
-  const showTagsRef = useRef(showTags);
-  const rangesRef = useRef(ranges);
-  const yawOffsetRef = useRef(0);
-  const mouseRef = useRef({ x: 0, y: 0, active: false }); // ✅ Mouse tracking
 
-  useEffect(() => {
-    scaleRef.current = scale;
-  }, [scale]);
   useEffect(() => {
     anchorsRef.current = anchors;
   }, [anchors]);
+
   useEffect(() => {
-    showTagsRef.current = showTags;
-  }, [showTags]);
-  useEffect(() => {
-    rangesRef.current = ranges;
-  }, [ranges]);
-  useEffect(() => {
-    poseRef.current = pose;
-  }, [pose]);
-  useEffect(() => {
-    yawOffsetRef.current = yawOffset;
     localStorage.setItem("uwb_yaw_offset", yawOffset.toString());
   }, [yawOffset]);
 
@@ -391,7 +369,7 @@ export default function App() {
 
   const calDirection = () => {
     // เซ็ตให้มุมปัจจุบันของหุ่น กลายเป็น 0 (หันซ้าย)
-    const currentYaw = poseRef.current.yaw || 0;
+    const currentYaw = pose.yaw || 0;
     setYawOffset(currentYaw);
     showToast("CAL DIRECTION OK", "success");
   };
@@ -469,16 +447,6 @@ export default function App() {
         } else if (ROT_CMDS[activeKey]) {
           sendDriveCmd(ROT_CMDS[activeKey]);
         }
-      } else {
-        // No keys pressed -> STOP (but send repeatedly? usually safer to just active stop once, but user asked for repeat)
-        // To avoid spamming STOP when idle, we could check last sent. 
-        // But for simplicity/safety, let's just active STOP if stack is empty (maybe limit rate to avoid flood if needed)
-        // For now, let's NOT send STOP repeatedly if idle, only on release.
-        // Wait, the user wants "Repeat". If I hold nothing, I shouldn't spam STOP.
-        // The release event sends STOP once. The interval only sends if keys are active.
-        // BUT if I release a key and stack becomes empty, I need to ensure STOP is sent at least once.
-        // The `manualRelease` logic handles the "Release -> Check Stack -> if empty send STOP".
-        // So this interval only needs to handle "Active Keys".
       }
     }, 200);
 
@@ -552,15 +520,6 @@ export default function App() {
     }
   };
 
-  const stopNow = async () => {
-    // หยุดแบบ “ตัดคำสั่งเดิน” ไม่ให้กลับไปวิ่งเอง
-    pressedKeysRef.current = [];
-    setDriveKey(null);
-
-    await sendCmd({ cmd: "STOP" }); // ✅ ส่ง {"cmd":"STOP"}
-    // จะโชว์ toast ก็ได้
-    // showToast("STOP", "success");
-  };
   const codeToRotateKey = (code) => {
     if (code === "KeyQ") return "Q";
     if (code === "KeyE") return "E";
@@ -700,7 +659,6 @@ export default function App() {
               A3: parseFloat(j.a[2]) || 0,
               A4: parseFloat(j.a[3]) || 0,
             };
-            rangesRef.current = newRanges;
             setRanges(newRanges);
           }
 
@@ -821,335 +779,6 @@ export default function App() {
         wsCmdRef.current.close();
       }
     };
-  }, []);
-
-  /* --- Canvas Drawing (ลด glow/ความ neon ให้ดูคนทำ) --- */
-  useEffect(() => {
-    const cvs = canvasRef.current;
-    if (!cvs) return;
-    const ctx = cvs.getContext("2d");
-    let raf;
-
-    const COLORS = {
-      bg: "#0f172a",
-      grid: "rgba(255,255,255,0.05)",
-      boundary: "rgba(59,130,246,0.35)",
-      anchorOn: "#16a34a",
-      anchorOff: "#64748b",
-      tag1: "#3b82f6",
-
-      labelBg: "rgba(17,26,43,0.92)",
-      labelBd: "rgba(255,255,255,0.10)",
-      text: "#e5e7eb",
-      muted: "#9ca3af",
-    };
-
-    const mmToPx = (mm, s) => mm * s;
-
-    const getBoundsFromAnchors = (anchorsList) => {
-      if (anchorsList && anchorsList.length) {
-        let minX = Infinity,
-          maxX = -Infinity,
-          minY = Infinity,
-          maxY = -Infinity;
-
-        for (const a of anchorsList) {
-          if (typeof a.x_mm !== "number" || typeof a.y_mm !== "number")
-            continue;
-          minX = Math.min(minX, a.x_mm);
-          maxX = Math.max(maxX, a.x_mm);
-          minY = Math.min(minY, a.y_mm);
-          maxY = Math.max(maxY, a.y_mm);
-        }
-
-        if (
-          isFinite(minX) &&
-          isFinite(maxX) &&
-          isFinite(minY) &&
-          isFinite(maxY) &&
-          minX !== maxX &&
-          minY !== maxY
-        ) {
-          return { minX, maxX, minY, maxY };
-        }
-      }
-      return { minX: 0, maxX: FIELD_W, minY: 0, maxY: FIELD_H };
-    };
-
-    const toPx = (x_mm, y_mm, cx, cy, s, bounds) => {
-      const midX = (bounds.minX + bounds.maxX) / 2;
-      const midY = (bounds.minY + bounds.maxY) / 2;
-      return {
-        px: cx + mmToPx(x_mm - midX, s),
-        py: cy + mmToPx(midY - y_mm, s),
-      };
-    };
-    const drawRobot = (x, y, size, color, yawDeg) => {
-      ctx.save();
-      ctx.translate(x, y);
-      // ชดเชยให้ 0 องศาหันไปทาง "ซ้าย" (Front) และทวนเข็มตามค่า IMU
-      const angleRad = ((180 - yawDeg) * Math.PI) / 180;
-      ctx.rotate(angleRad);
-
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.moveTo(size * 1.5, 0);
-      ctx.lineTo(-size, size);
-      ctx.lineTo(-size, -size);
-      ctx.closePath();
-      ctx.fill();
-
-      ctx.strokeStyle = "rgba(255,255,255,0.9)";
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      ctx.restore();
-    };
-    const drawTriangle = (x, y, size, color, dir = "left") => {
-      ctx.save();
-      ctx.fillStyle = color;
-      ctx.beginPath();
-
-      if (dir === "left") {
-        // tip -> left
-        ctx.moveTo(x - size, y);
-        ctx.lineTo(x + size * 0.7, y - size * 0.85);
-        ctx.lineTo(x + size * 0.7, y + size * 0.85);
-      } else if (dir === "right") {
-        ctx.moveTo(x + size, y);
-        ctx.lineTo(x - size * 0.7, y - size * 0.85);
-        ctx.lineTo(x - size * 0.7, y + size * 0.85);
-      } else if (dir === "up") {
-        ctx.moveTo(x, y - size);
-        ctx.lineTo(x + size * 0.85, y + size * 0.7);
-        ctx.lineTo(x - size * 0.85, y + size * 0.7);
-      } else {
-        // down
-        ctx.moveTo(x, y + size);
-        ctx.lineTo(x + size * 0.85, y - size * 0.7);
-        ctx.lineTo(x - size * 0.85, y - size * 0.7);
-      }
-
-      ctx.closePath();
-      ctx.fill();
-
-      ctx.strokeStyle = "rgba(255,255,255,0.18)";
-      ctx.lineWidth = 1.2;
-      ctx.stroke();
-      ctx.restore();
-    };
-
-    const drawTagLabel = (text, x, y, above = true) => {
-      ctx.save();
-      ctx.font = "600 12px Inter";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-
-      const padX = 10;
-      const h = 22;
-      const w = ctx.measureText(text).width + padX * 2;
-      const bx = x - w / 2;
-      const by = above ? y - 26 - h : y + 26;
-
-      ctx.fillStyle = COLORS.labelBg;
-      ctx.strokeStyle = COLORS.labelBd;
-      ctx.lineWidth = 1;
-
-      ctx.beginPath();
-      ctx.roundRect(bx, by, w, h, 8);
-      ctx.fill();
-      ctx.stroke();
-
-      ctx.fillStyle = COLORS.text;
-      ctx.fillText(text, x, by + h / 2);
-      ctx.restore();
-    };
-
-    const draw = () => {
-      const W = cvs.width,
-        H = cvs.height;
-      const cx = W / 2,
-        cy = H / 2;
-      const s = scaleRef.current;
-      const show = showTagsRef.current;
-      const currentRanges = rangesRef.current;
-      const anchorsNow = anchorsRef.current || [];
-      const bounds = getBoundsFromAnchors(anchorsNow);
-
-      // Clear
-      ctx.fillStyle = COLORS.bg;
-      ctx.fillRect(0, 0, W, H);
-
-      // Grid
-      ctx.strokeStyle = COLORS.grid;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      const STEP = 500;
-
-      const xStart = Math.floor(bounds.minX / STEP) * STEP;
-      const xEnd = Math.ceil(bounds.maxX / STEP) * STEP;
-      for (let x = xStart; x <= xEnd; x += STEP) {
-        let p1 = toPx(x, bounds.minY, cx, cy, s, bounds);
-        let p2 = toPx(x, bounds.maxY, cx, cy, s, bounds);
-        ctx.moveTo(p1.px, p1.py);
-        ctx.lineTo(p2.px, p2.py);
-      }
-
-      const yStart = Math.floor(bounds.minY / STEP) * STEP;
-      const yEnd = Math.ceil(bounds.maxY / STEP) * STEP;
-      for (let y = yStart; y <= yEnd; y += STEP) {
-        let p1 = toPx(bounds.minX, y, cx, cy, s, bounds);
-        let p2 = toPx(bounds.maxX, y, cx, cy, s, bounds);
-        ctx.moveTo(p1.px, p1.py);
-        ctx.lineTo(p2.px, p2.py);
-      }
-      ctx.stroke();
-
-      // Boundary
-      const b1 = toPx(bounds.minX, bounds.minY, cx, cy, s, bounds);
-      const b2 = toPx(bounds.maxX, bounds.minY, cx, cy, s, bounds);
-      const b3 = toPx(bounds.maxX, bounds.maxY, cx, cy, s, bounds);
-      const b4 = toPx(bounds.minX, bounds.maxY, cx, cy, s, bounds);
-
-      ctx.strokeStyle = COLORS.boundary;
-      ctx.setLineDash([8, 8]);
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(b1.px, b1.py);
-      ctx.lineTo(b2.px, b2.py);
-      ctx.lineTo(b3.px, b3.py);
-      ctx.lineTo(b4.px, b4.py);
-      ctx.closePath();
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // Anchors
-      for (const a of anchorsRef.current) {
-        const { px, py } = toPx(a.x_mm, a.y_mm, cx, cy, s, bounds);
-
-        const rangeVal = currentRanges[a.id] || 0;
-        const isOnline = rangeVal > 0;
-
-        ctx.fillStyle = isOnline ? COLORS.anchorOn : COLORS.anchorOff;
-        ctx.beginPath();
-        ctx.arc(px, py, isOnline ? 5 : 4, 0, Math.PI * 2);
-        ctx.fill();
-
-        if (show) {
-          ctx.strokeStyle = isOnline
-            ? "rgba(22,163,74,0.30)"
-            : "rgba(148,163,184,0.20)";
-          ctx.lineWidth = 1;
-
-          ctx.beginPath();
-          ctx.arc(px, py, 14, 0, Math.PI * 2);
-          ctx.stroke();
-
-          ctx.fillStyle = isOnline ? COLORS.text : COLORS.muted;
-          ctx.font = "600 13px Inter";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "alphabetic";
-
-          const labelText = `${a.id} ${rangeVal.toFixed(2)}m`;
-          ctx.fillText(labelText, px, py - 18);
-        }
-      }
-
-      // Tag1 (Only)
-      const t1 = poseRef.current;
-
-      const t1Finite = Number.isFinite(t1.x_mm) && Number.isFinite(t1.y_mm);
-      if (t1Finite) {
-        const p1 = toPx(t1.x_mm, t1.y_mm, cx, cy, s, bounds);
-
-        // วาดหุ่นแบบหมุนได้ (0 องศา = หันซ้าย)
-        drawRobot(
-          p1.px,
-          p1.py,
-          10,
-          COLORS.tag1,
-          (t1.yaw || 0) - yawOffsetRef.current,
-        );
-        if (show) drawTagLabel("Robot UWB", p1.px, p1.py, true);
-
-        // XY label (Tag1)
-        if (show) {
-          ctx.save();
-          ctx.font = "11px JetBrains Mono";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "alphabetic";
-
-          const label = `X:${(t1.x_mm / 1000).toFixed(2)} Y:${(t1.y_mm / 1000).toFixed(2)}`;
-          const tw = ctx.measureText(label).width + 16;
-
-          ctx.fillStyle = COLORS.labelBg;
-          ctx.strokeStyle = COLORS.labelBd;
-          ctx.beginPath();
-          ctx.roundRect(p1.px - tw / 2, p1.py + 24, tw, 24, 6);
-          ctx.fill();
-          ctx.stroke();
-
-          ctx.fillStyle = COLORS.text;
-          ctx.fillText(label, p1.px, p1.py + 42);
-          ctx.restore();
-        }
-      }
-
-      // ✅ Mouse Hover Tooltip
-      if (mouseRef.current.active) {
-        const mx = mouseRef.current.x;
-        const my = mouseRef.current.y;
-
-        // Inverse Calcs
-        const midX = (bounds.minX + bounds.maxX) / 2;
-        const midY = (bounds.minY + bounds.maxY) / 2;
-
-        const mmX = (mx - cx) / s + midX;
-        const mmY = midY - (my - cy) / s;
-
-        const txt = `X:${(mmX / 1000).toFixed(2)} Y:${(mmY / 1000).toFixed(2)}`;
-
-        ctx.save();
-        ctx.font = "600 12px Inter";
-        ctx.textAlign = "left";
-        ctx.textBaseline = "bottom";
-
-        // Draw crosshair
-        ctx.strokeStyle = "rgba(255,255,255,0.3)";
-        ctx.lineWidth = 1;
-        ctx.setLineDash([4, 4]);
-        ctx.beginPath();
-        ctx.moveTo(mx, 0);
-        ctx.lineTo(mx, H);
-        ctx.moveTo(0, my);
-        ctx.lineTo(W, my);
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        // Tooltip
-        const pad = 6;
-        const tw = ctx.measureText(txt).width + pad * 2;
-        const th = 20;
-        const tx = mx + 10;
-        const ty = my - 10;
-
-        ctx.fillStyle = "rgba(0,0,0,0.8)";
-        ctx.strokeStyle = "rgba(255,255,255,0.2)";
-        ctx.beginPath();
-        ctx.roundRect(tx, ty - th, tw, th, 4);
-        ctx.fill();
-        ctx.stroke();
-
-        ctx.fillStyle = "#fff";
-        ctx.fillText(txt, tx + pad, ty - pad + 2);
-
-        ctx.restore();
-      }
-
-      raf = requestAnimationFrame(draw);
-    };
-
-    raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
   }, []);
 
   /* ================== RENDER ================== */
@@ -1308,284 +937,37 @@ export default function App() {
           {/* Left Sidebar */}
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             {/* Anchors + Calibration */}
-            <div className="panel" style={{ padding: 16 }}>
-              <div className="panelTitle">Anchor distances</div>
-
-              <div style={{ display: "grid", gap: 10 }}>
-                {Object.entries(ranges).map(([k, v]) => (
-                  <div
-                    key={k}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                    }}
-                  >
-                    <span
-                      style={{
-                        color: "#ffffff",
-                        fontSize: 14,
-                        fontWeight: 700,
-                      }}
-                    >
-                      {k}
-                    </span>
-                    <span
-                      className="mono"
-                      style={{ fontSize: 13, color: "#ffffff" }}
-                    >
-                      {v.toFixed(2)}m
-                    </span>
-                  </div>
-                ))}
-              </div>
-
-              <div
-                style={{
-                  marginTop: 14,
-                  paddingTop: 14,
-                  borderTop: "1px solid var(--border)",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    marginBottom: 10,
-                  }}
-                >
-                  <div className="panelTitle" style={{ margin: 0 }}>
-                    Tag1 calibration
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 12,
-                      fontWeight: 800,
-                      color: CAL_COLOR[calState] || "var(--muted)",
-                    }}
-                  >
-                    {CAL_TEXT[calState] || "READY"}
-                  </div>
-                </div>
-
-                <div style={{ display: "grid", gap: 10 }}>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      flexWrap: "wrap",
-                    }}
-                  >
-                    <span
-                      style={{
-                        fontSize: 12,
-                        color: "var(--muted)",
-                        fontWeight: 800,
-                      }}
-                    >
-                      REF
-                    </span>
-
-                    <input
-                      className="cal-in"
-                      type="number"
-                      step="0.01"
-                      value={refX}
-                      onChange={(e) => setRefX(e.target.value)}
-                      inputMode="decimal"
-                      onFocus={(e) => e.target.select()}
-                    />
-
-                    <input
-                      className="cal-in"
-                      type="number"
-                      step="0.01"
-                      value={refY}
-                      onChange={(e) => setRefY(e.target.value)}
-                      inputMode="decimal"
-                      onFocus={(e) => e.target.select()}
-                    />
-                  </div>
-
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      flexWrap: "wrap",
-                    }}
-                  >
-                    <button
-                      onClick={calT1}
-                      disabled={!connected}
-                      className="btn btnPrimary"
-                      style={{
-                        height: 34,
-                        padding: "0 12px",
-                        borderRadius: 10,
-                      }}
-                    >
-                      CAL
-                    </button>
-
-                    <button
-                      onClick={calDirection}
-                      disabled={!connected}
-                      className="btn btnNeutral"
-                      style={{
-                        height: 34,
-                        padding: "0 12px",
-                        borderRadius: 10,
-                      }}
-                      title="Set Current Direction as 0 (Front)"
-                    >
-                      CAL DIR
-                    </button>
-
-                    <button
-                      onClick={saveT1}
-                      disabled={!connected}
-                      className="btn btnSuccess"
-                      style={{
-                        height: 34,
-                        padding: "0 12px",
-                        borderRadius: 10,
-                      }}
-                    >
-                      SAVE
-                    </button>
-
-                    <button
-                      onClick={resetT1}
-                      disabled={!connected}
-                      className="btn btnNeutral"
-                      style={{
-                        height: 34,
-                        padding: "0 12px",
-                        borderRadius: 10,
-                      }}
-                    >
-                      RESET
-                    </button>
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    marginTop: 10,
-                    fontSize: 12,
-                    color: "var(--muted)",
-                    lineHeight: 1.35,
-                  }}
-                />
-              </div>
-            </div>
+            <SettingsPanel
+              ranges={ranges}
+              calState={calState}
+              CAL_TEXT={CAL_TEXT}
+              CAL_COLOR={CAL_COLOR}
+              refX={refX}
+              setRefX={setRefX}
+              refY={refY}
+              setRefY={setRefY}
+              calT1={calT1}
+              calDirection={calDirection}
+              saveT1={saveT1}
+              resetT1={resetT1}
+              connected={connected}
+            />
 
             {/* Manual Drive (TEST) */}
-            <div className="panel" style={{ padding: 16 }}>
-              <div className="panelTitle">Manual drive (test)</div>
+            <Joystick
+              rotKey={rotKey}
+              driveKey={driveKey}
+              stopHeld={stopHeld}
+              connected={connected}
+              rotatePress={rotatePress}
+              rotateRelease={rotateRelease}
+              manualPress={manualPress}
+              manualRelease={manualRelease}
+              stopHoldPress={stopHoldPress}
+              stopHoldRelease={stopHoldRelease}
+            />
 
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(3, 60px)",
-                  gap: 8,
-                  justifyContent: "center",
-                }}
-              >
-                {/* Q */}
-                <button
-                  className={`btn ${rotKey === "Q" ? "btnPrimary" : "btnNeutral"}`}
-                  onMouseDown={() => rotatePress("Q")}
-                  onMouseUp={rotateRelease}
-                  onMouseLeave={rotateRelease}
-                >
-                  Q
-                </button>
-
-                {/* W */}
-                <button
-                  className={`btn ${driveKey === "W" ? "btnPrimary" : "btnNeutral"}`}
-                  onMouseDown={() => manualPress("W")}
-                  onMouseUp={() => manualRelease("W")}
-                  onMouseLeave={() => manualRelease("W")}
-                >
-                  W
-                </button>
-
-                {/* E */}
-                <button
-                  className={`btn ${rotKey === "E" ? "btnPrimary" : "btnNeutral"}`}
-                  onMouseDown={() => rotatePress("E")}
-                  onMouseUp={rotateRelease}
-                  onMouseLeave={rotateRelease}
-                >
-                  E
-                </button>
-
-                {/* A */}
-                <button
-                  className={`btn ${driveKey === "A" ? "btnPrimary" : "btnNeutral"}`}
-                  onMouseDown={() => manualPress("A")}
-                  onMouseUp={() => manualRelease("A")}
-                  onMouseLeave={() => manualRelease("A")}
-                >
-                  A
-                </button>
-
-                {/* S */}
-                <button
-                  className={`btn ${driveKey === "S" ? "btnPrimary" : "btnNeutral"}`}
-                  onMouseDown={() => manualPress("S")}
-                  onMouseUp={() => manualRelease("S")}
-                  onMouseLeave={() => manualRelease("S")}
-                >
-                  S
-                </button>
-
-                {/* D */}
-                <button
-                  className={`btn ${driveKey === "D" ? "btnPrimary" : "btnNeutral"}`}
-                  onMouseDown={() => manualPress("D")}
-                  onMouseUp={() => manualRelease("D")}
-                  onMouseLeave={() => manualRelease("D")}
-                >
-                  D
-                </button>
-              </div>
-
-              <div
-                style={{
-                  marginTop: 12,
-                  display: "flex",
-                  gap: 10,
-                  alignItems: "center",
-                }}
-              >
-                <KeyBtn
-                  label="STOP"
-                  wide
-                  danger
-                  active={stopHeld} // ✅ ให้มีสถานะกดค้างเหมือนปุ่มอื่น
-                  disabled={!connected}
-                  onDown={stopHoldPress} // ✅ กดค้าง
-                  onUp={stopHoldRelease} // ✅ ปล่อยแล้ว resume ถ้ามีปุ่มค้างอยู่
-                />
-              </div>
-
-              <div
-                style={{
-                  marginTop: 10,
-                  fontSize: 12,
-                  color: "var(--muted)",
-                  lineHeight: 1.35,
-                }}
-              ></div>
-            </div>
-
-            {/* Controls (ล่างสุด) ✅ ต้องมี div ครอบ ไม่งั้น </div> จะเพี้ยน */}
+            {/* Controls (ล่างสุด) */}
             <div style={{ marginTop: "auto", display: "grid", gap: 10 }}>
               <button
                 onClick={async () => {
@@ -1639,132 +1021,21 @@ export default function App() {
           </div>
 
           {/* Right: Visualization */}
-          <div
-            className="panel"
-            style={{
-              padding: 0,
-              position: "relative",
-              overflow: "hidden",
-              display: "flex",
-              flexDirection: "column",
-            }}
-          >
-            {/* Map Toolbar */}
-            <div
-              style={{
-                position: "absolute",
-                top: 12,
-                right: 12,
-                display: "flex",
-                gap: 8,
-                zIndex: 10,
-              }}
-            >
-              <button
-                onClick={() => setShowTags(!showTags)}
-                className="btn btnGhost"
-                style={{
-                  height: 36,
-                  padding: "0 12px",
-                  borderRadius: 10,
-                  fontSize: 12,
-                }}
-              >
-                {showTags ? "Hide tags" : "Show tags"}
-              </button>
-            </div>
-
-            {/* Canvas */}
-            <div
-              style={{
-                flex: 1,
-                background: "var(--surface2)",
-                position: "relative",
-              }}
-            >
-              <canvas
-                ref={canvasRef}
-                width={1200}
-                height={700}
-                style={{
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "contain",
-                  display: "block",
-                  touchAction: "none",
-                }}
-                onPointerMove={(e) => {
-                  const rect = e.target.getBoundingClientRect();
-                  const scaleX = e.target.width / rect.width;
-                  const scaleY = e.target.height / rect.height;
-                  mouseRef.current = {
-                    x: (e.clientX - rect.left) * scaleX,
-                    y: (e.clientY - rect.top) * scaleY,
-                    active: true,
-                  };
-                }}
-                onPointerLeave={() => {
-                  mouseRef.current.active = false;
-                }}
-              />
-            </div>
-
-            {/* Zoom Footer */}
-            <div
-              style={{
-                padding: "12px 14px",
-                borderTop: "1px solid var(--border)",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                background: "var(--surface)",
-              }}
-            >
-              <span
-                style={{ fontSize: 13, color: "var(--muted)", fontWeight: 700 }}
-              >
-                MAP VIEW: {(scale * 100).toFixed(0)}%
-              </span>
-
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  width: 240,
-                }}
-              >
-                <button
-                  className="btn btnGhost"
-                  style={{ height: 30, width: 34, borderRadius: 10 }}
-                  onClick={() =>
-                    setScale((s) => Math.max(ZOOM_MIN, s - ZOOM_STEP))
-                  }
-                >
-                  −
-                </button>
-
-                <input
-                  type="range"
-                  min={ZOOM_MIN}
-                  max={ZOOM_MAX}
-                  step={ZOOM_STEP}
-                  value={scale}
-                  onChange={(e) => setScale(parseFloat(e.target.value))}
-                />
-
-                <button
-                  className="btn btnGhost"
-                  style={{ height: 30, width: 34, borderRadius: 10 }}
-                  onClick={() =>
-                    setScale((s) => Math.min(ZOOM_MAX, s + ZOOM_STEP))
-                  }
-                >
-                  +
-                </button>
-              </div>
-            </div>
-          </div>
+          <MapCanvas
+            anchors={anchors}
+            ranges={ranges}
+            pose={pose}
+            yawOffset={yawOffset}
+            showTags={showTags}
+            setShowTags={setShowTags}
+            scale={scale}
+            setScale={setScale}
+            ZOOM_MIN={ZOOM_MIN}
+            ZOOM_MAX={ZOOM_MAX}
+            ZOOM_STEP={ZOOM_STEP}
+            FIELD_W={FIELD_W}
+            FIELD_H={FIELD_H}
+          />
         </div>
       </div>
     </>
@@ -1806,49 +1077,3 @@ const Metric = ({ label, value, unit }) => (
     </div>
   </div>
 );
-const KeyBtn = ({
-  label,
-  active,
-  disabled,
-  onDown,
-  onUp,
-  wide = false,
-  danger = false,
-}) => {
-  const baseBg = danger ? "rgba(220,38,38,0.20)" : "rgba(255,255,255,0.04)";
-  const activeBg = danger ? "rgba(220,38,38,0.35)" : "rgba(59,130,246,0.22)";
-
-  const baseBd = danger ? "rgba(220,38,38,0.35)" : "var(--border)";
-  const activeBd = danger ? "rgba(220,38,38,0.60)" : "rgba(59,130,246,0.55)";
-
-  return (
-    <button
-      className="btn"
-      disabled={disabled}
-      onPointerDown={(e) => {
-        e.preventDefault();
-        e.currentTarget.setPointerCapture?.(e.pointerId);
-        onDown?.();
-      }}
-      onPointerUp={(e) => {
-        e.preventDefault();
-        onUp?.();
-      }}
-      onPointerLeave={() => onUp?.()}
-      onPointerCancel={() => onUp?.()}
-      style={{
-        height: 44,
-        borderRadius: 12,
-        fontWeight: 800,
-        letterSpacing: 0.5,
-        background: active ? activeBg : baseBg,
-        borderColor: active ? activeBd : baseBd,
-        width: wide ? "100%" : "auto",
-        gridColumn: wide ? "1 / -1" : undefined,
-      }}
-      title={label}
-    >
-      {label}
-    </button>
-  );
-};
