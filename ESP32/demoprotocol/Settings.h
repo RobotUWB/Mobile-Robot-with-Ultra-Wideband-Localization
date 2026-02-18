@@ -13,8 +13,12 @@ const IPAddress subnet(255, 255, 255, 0);
 const IPAddress primaryDNS(8, 8, 8, 8);
 
 // --- Pin Definitions ---
-#define RX_PIN 16
-#define TX_PIN 17
+#define RX_Control 16
+#define TX_Control 17
+
+#define RX_UWB 26
+#define TX_UWB 27
+#define UWB_BAUDRATE 115200
 
 // --- System Config ---
 #define OTA_HOSTNAME "Sorting"

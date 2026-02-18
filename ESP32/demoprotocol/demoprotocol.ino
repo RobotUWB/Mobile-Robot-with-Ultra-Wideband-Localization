@@ -7,12 +7,18 @@
 
 // --- Global Objects ---
 HardwareSerial STM32Serial(2);
+HardwareSerial UWBSerial(1);
 WebSocketsServer webSocket = WebSocketsServer(WEBSOCKET_PORT); 
+
+
 
 // --- Variables ---
 float currentAngle = 0.0;
 unsigned long previousWiFiCheck = 0;
 bool isWiFiConnected = false;
+
+float currentX = 0.0;
+float currentY = 0.0;
 
 // --- Serial Buffer ---
 char inputBuffer[MAX_SERIAL_BUFFER];
@@ -138,6 +144,44 @@ void checkSTM32() {
   }
 }
 
+// --- checkUWB ---
+void checkUWB() {
+  // เช็กว่ามีข้อมูลส่งมาจาก UWB ไหม
+  if (UWBSerial.available()) {
+    // อ่านข้อความจนกว่าจะเจอ \n
+    String line = UWBSerial.readStringUntil('\n');
+    line.trim(); // ตัดพวกช่องว่าง หรือ \r ทิ้งไปให้หมด
+    
+    Serial.println("RAW UWB: " + line);
+
+    // เช็ก Header ว่าขึ้นต้นด้วย "U," หรือเปล่า
+    if (line.startsWith("U,")) {
+      
+      // หาตำแหน่งของเครื่องหมายลูกน้ำ
+      int firstComma = line.indexOf(',');
+      int secondComma = line.indexOf(',', firstComma + 1);
+      
+      // ถ้าเจอคอมม่าครบทั้ง 2 ตัว แสดงว่าฟอร์แมตถูกต้อง
+      if (firstComma > 0 && secondComma > 0) {
+        // หั่นข้อความเอาเฉพาะตัวเลข
+        String xStr = line.substring(firstComma + 1, secondComma);
+        String yStr = line.substring(secondComma + 1);
+        
+        // แปลงเป็นตัวเลขทศนิยม
+        currentX = xStr.toFloat() /1000.0;
+        currentY = yStr.toFloat() /1000.0;
+        
+        // ปริ้นท์ออก Serial Monitor เพื่อเช็กความถูกต้อง
+        Serial.println("UWB Position -> X: " + String(currentX) + " mm | Y: " + String(currentY) + " mm");
+        
+        // ส่งข้อมูลขึ้นหน้าเว็บให้เพื่อน Web Dev เอาไปใช้ต่อ
+        String json = "{\"type\":\"uwb\", \"x\":" + String(currentX) + ", \"y\":" + String(currentY) + "}";
+        webSocket.broadcastTXT(json);
+      }
+    }
+  }
+}
+
 // --- WebSocket & Heartbeat ---
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
   switch(type) {
@@ -153,7 +197,30 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
       if (payloadStr == "PING") {
         lastWebHeartbeat = millis();
         webSocket.broadcastTXT("PONG");
-      } else {
+      } 
+      else if (payloadStr.startsWith("UWB")) { 
+        // Optional: Manual Bridge for UWB commands
+        UWBSerial.println(payloadStr);
+      }
+      else if (payloadStr.startsWith("GOTO:")) { // Format: GOTO:x:y
+        int firstColon = payloadStr.indexOf(':');
+        int secondColon = payloadStr.indexOf(':', firstColon + 1);
+        if (secondColon > 0) {
+           String xStr = payloadStr.substring(firstColon+1, secondColon);
+           String yStr = payloadStr.substring(secondColon+1);
+           targetX = xStr.toFloat();
+           targetY = yStr.toFloat();
+           isNavigating = true;
+           Serial.println("Nav Started -> Target: " + String(targetX) + ", " + String(targetY));
+        }
+      }
+      else if (payloadStr == "STOP") {
+        isNavigating = false;
+        sendToSTM32("STOP");
+      }
+      else { 
+        // Manual Drive overrides Auto Nav
+        isNavigating = false; 
         sendToSTM32(payloadStr);
       }
       break;
@@ -181,7 +248,9 @@ void handleHeartbeat() {
 
 void setup() {
   Serial.begin(115200);
-  STM32Serial.begin(115200, SERIAL_8N1, RX_PIN, TX_PIN);
+  STM32Serial.begin(115200, SERIAL_8N1, RX_Control, TX_Control);
+
+  UWBSerial.begin(UWB_BAUDRATE, SERIAL_8N1, RX_UWB, TX_UWB);
 
   initWiFi();
   
@@ -194,10 +263,87 @@ void setup() {
   Serial.println("System Ready. Full Protocol Active.");
 }
 
+// --- Navigation Variables ---
+float targetX = 0.0;
+float targetY = 0.0;
+bool isNavigating = false;
+unsigned long lastNavUpdate = 0;
+const int NAV_UPDATE_INTERVAL = 100; // 10Hz
+const float DIST_THRESHOLD = 0.20;   // 20cm accepted error
+
+// --- Navigation Logic ---
+void runNavigation() {
+  if (!isNavigating) return;
+
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastNavUpdate < NAV_UPDATE_INTERVAL) return;
+  lastNavUpdate = currentMillis;
+
+  // 1. Calculate Error
+  float dx = targetX - currentX;
+  float dy = targetY - currentY;
+  float distance = sqrt(dx*dx + dy*dy);
+
+  // Check if reached
+  if (distance < DIST_THRESHOLD) {
+    Serial.println("Nav: Target Reached!");
+    sendToSTM32("STOP");
+    isNavigating = false;
+    webSocket.broadcastTXT("{\"type\":\"ack\", \"status\":\"target_reached\"}");
+    return;
+  }
+
+  // 2. Calculate Heading Error
+  float desiredAngle = atan2(dy, dx) * 180.0 / PI;
+  float angleError = desiredAngle - currentAngle;
+  
+  // Normalize angle (-180 to 180)
+  while (angleError > 180) angleError -= 360;
+  while (angleError < -180) angleError += 360;
+
+  // 3. Control Logic (Simple Proportional)
+  float kp_v = 300.0; // Speed gain
+  float kp_w = 4.0;   // Turn gain
+  
+  float cmd_v = 0;
+  float cmd_w = 0;
+
+  if (abs(angleError) > 20.0) {
+    // If facing wrong way, turn in place first
+    cmd_v = 0;
+    cmd_w = angleError * kp_w;
+  } else {
+    // If facing roughly correct, drive and correct
+    cmd_v = distance * kp_v;
+    if (cmd_v > 300) cmd_v = 300; // Max speed limit
+    cmd_w = angleError * kp_w;
+  }
+
+  // Debug
+  // Serial.printf("Nav: Dist=%.2f AngErr=%.2f -> V=%.0f W=%.0f\n", distance, angleError, cmd_v, cmd_w);
+
+  // 4. Send to STM32
+  // Command format: V,linear_velocity,angular_velocity
+  String cmd = "V," + String(cmd_v, 0) + "," + String(cmd_w, 0);
+  sendToSTM32SerialOnly(cmd); // New function to avoid broadcast loop
+}
+
+void sendToSTM32SerialOnly(String serialCmd) {
+  if(serialCmd != "") {
+    uint8_t cs = 0;
+    for (int i = 0; i < serialCmd.length(); i++) cs ^= serialCmd[i];
+    char buf[10];
+    sprintf(buf, "*%02X\n", cs);
+    STM32Serial.print(serialCmd + String(buf));
+  }
+}
+
 void loop() {
   ArduinoOTA.handle();
   webSocket.loop();
-  checkSTM32();        
+  checkSTM32();     
+  checkUWB();  
   handleWiFiStateMachine();
   handleHeartbeat(); 
+  runNavigation(); // <--- Run Nav Loop
 }
