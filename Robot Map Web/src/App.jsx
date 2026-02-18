@@ -789,6 +789,18 @@ export default function App() {
         ? "rgba(22,163,74,0.95)"
         : "rgba(59,130,246,0.95)";
 
+  const handleMapClick = (x, y) => {
+    // x, y are in meters
+    const cmdVal = `GOTO:${x.toFixed(2)}:${y.toFixed(2)}`;
+    // Send via WebSocket (Control ESP)
+    if (wsCmdRef.current && wsCmdRef.current.readyState === WebSocket.OPEN) {
+      wsCmdRef.current.send(cmdVal);
+      showToast(`Going to X:${x.toFixed(2)} Y:${y.toFixed(2)}`, "info");
+    } else {
+      showToast("Control WS not connected", "error");
+    }
+  };
+
   return (
     <>
       <GlobalStyles />
@@ -1004,7 +1016,11 @@ export default function App() {
 
               <button
                 onClick={() => {
-                  sendCmd({ cmd: "STOP" });
+                  // Prefer WebSocket for Stop if available, else sendCmd logic (which falls back)
+                  // But sendCmd calls fetch CMD_URL which is HTTP.
+                  // User asked: "wsCmd.send('STOP')"
+                  // sendDriveCmd does check WS first.
+                  sendDriveCmd("STOP");
                   setIsPaused(false);
                   showToast("EMERGENCY STOP TRIGGERED", "error");
                 }}
@@ -1035,11 +1051,13 @@ export default function App() {
             ZOOM_STEP={ZOOM_STEP}
             FIELD_W={FIELD_W}
             FIELD_H={FIELD_H}
+            onMapClick={handleMapClick}
           />
         </div>
       </div>
     </>
   );
+
 }
 
 /* ================== SUB COMPONENTS ================== */

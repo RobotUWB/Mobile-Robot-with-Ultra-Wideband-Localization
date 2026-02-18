@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 const MapCanvas = ({
     anchors,
@@ -14,9 +14,13 @@ const MapCanvas = ({
     ZOOM_STEP,
     FIELD_W,
     FIELD_H,
+    onMapClick,
 }) => {
     const canvasRef = useRef(null);
     const mouseRef = useRef({ x: 0, y: 0, active: false });
+
+    // ✅ NEW: Target for Confirmation
+    const [target, setTarget] = useState(null); // { x_m, y_m, px, py }
 
     // Refs for Animation Loop to avoid dependency staleness
     const scaleRef = useRef(scale);
@@ -33,6 +37,35 @@ const MapCanvas = ({
     useEffect(() => { rangesRef.current = ranges; }, [ranges]);
     useEffect(() => { poseRef.current = pose; }, [pose]);
     useEffect(() => { yawOffsetRef.current = yawOffset; }, [yawOffset]);
+
+    /* --- Helper Functions (Lifted for Render usage) --- */
+    const mmToPx = (mm, s) => mm * s;
+
+    const getBoundsFromAnchors = (anchorsList) => {
+        if (anchorsList && anchorsList.length) {
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            for (const a of anchorsList) {
+                if (typeof a.x_mm !== "number" || typeof a.y_mm !== "number") continue;
+                minX = Math.min(minX, a.x_mm);
+                maxX = Math.max(maxX, a.x_mm);
+                minY = Math.min(minY, a.y_mm);
+                maxY = Math.max(maxY, a.y_mm);
+            }
+            if (isFinite(minX) && isFinite(maxX) && isFinite(minY) && isFinite(maxY) && minX !== maxX && minY !== maxY) {
+                return { minX, maxX, minY, maxY };
+            }
+        }
+        return { minX: 0, maxX: FIELD_W, minY: 0, maxY: FIELD_H };
+    };
+
+    const toPx = (x_mm, y_mm, cx, cy, s, bounds) => {
+        const midX = (bounds.minX + bounds.maxX) / 2;
+        const midY = (bounds.minY + bounds.maxY) / 2;
+        return {
+            px: cx + mmToPx(x_mm - midX, s),
+            py: cy + mmToPx(midY - y_mm, s),
+        };
+    };
 
     /* --- Canvas Drawing (ลด glow/ความ neon ให้ดูคนทำ) --- */
     useEffect(() => {
@@ -55,46 +88,6 @@ const MapCanvas = ({
             muted: "#9ca3af",
         };
 
-        const mmToPx = (mm, s) => mm * s;
-
-        const getBoundsFromAnchors = (anchorsList) => {
-            if (anchorsList && anchorsList.length) {
-                let minX = Infinity,
-                    maxX = -Infinity,
-                    minY = Infinity,
-                    maxY = -Infinity;
-
-                for (const a of anchorsList) {
-                    if (typeof a.x_mm !== "number" || typeof a.y_mm !== "number")
-                        continue;
-                    minX = Math.min(minX, a.x_mm);
-                    maxX = Math.max(maxX, a.x_mm);
-                    minY = Math.min(minY, a.y_mm);
-                    maxY = Math.max(maxY, a.y_mm);
-                }
-
-                if (
-                    isFinite(minX) &&
-                    isFinite(maxX) &&
-                    isFinite(minY) &&
-                    isFinite(maxY) &&
-                    minX !== maxX &&
-                    minY !== maxY
-                ) {
-                    return { minX, maxX, minY, maxY };
-                }
-            }
-            return { minX: 0, maxX: FIELD_W, minY: 0, maxY: FIELD_H };
-        };
-
-        const toPx = (x_mm, y_mm, cx, cy, s, bounds) => {
-            const midX = (bounds.minX + bounds.maxX) / 2;
-            const midY = (bounds.minY + bounds.maxY) / 2;
-            return {
-                px: cx + mmToPx(x_mm - midX, s),
-                py: cy + mmToPx(midY - y_mm, s),
-            };
-        };
         const drawRobot = (x, y, size, color, yawDeg) => {
             ctx.save();
             ctx.translate(x, y);
@@ -143,10 +136,8 @@ const MapCanvas = ({
         };
 
         const draw = () => {
-            const W = cvs.width,
-                H = cvs.height;
-            const cx = W / 2,
-                cy = H / 2;
+            const W = cvs.width, H = cvs.height;
+            const cx = W / 2, cy = H / 2;
             const s = scaleRef.current;
             const show = showTagsRef.current;
             const currentRanges = rangesRef.current;
@@ -330,6 +321,16 @@ const MapCanvas = ({
         return () => cancelAnimationFrame(raf);
     }, []);
 
+    // Helper for Popup Positioning
+    const getTargetPx = () => {
+        if (!target) return null;
+        const cvs = canvasRef.current;
+        if (!cvs) return { px: 0, py: 0 };
+        const bounds = getBoundsFromAnchors(anchors);
+        return toPx(target.x_m * 1000, target.y_m * 1000, cvs.width / 2, cvs.height / 2, scale, bounds);
+    };
+    const targetPos = getTargetPx();
+
     return (
         <div
             className="panel"
@@ -384,6 +385,33 @@ const MapCanvas = ({
                         objectFit: "contain",
                         display: "block",
                         touchAction: "none",
+                        cursor: "crosshair",
+                    }}
+                    onPointerDown={(e) => {
+                        const rect = e.target.getBoundingClientRect();
+                        const scaleX = e.target.width / rect.width;
+                        const scaleY = e.target.height / rect.height;
+                        const x = (e.clientX - rect.left) * scaleX;
+                        const y = (e.clientY - rect.top) * scaleY;
+
+                        // Inverse Calculation
+                        const cvs = canvasRef.current;
+                        const cx = cvs.width / 2;
+                        const cy = cvs.height / 2;
+                        const s = scaleRef.current;
+
+                        const bounds = getBoundsFromAnchors(anchorsRef.current);
+                        const midX = (bounds.minX + bounds.maxX) / 2;
+                        const midY = (bounds.minY + bounds.maxY) / 2;
+
+                        const mmX = (x - cx) / s + midX;
+                        const mmY = midY - (y - cy) / s;
+
+                        // Set Target for Confirmation
+                        setTarget({
+                            x_m: mmX / 1000,
+                            y_m: mmY / 1000
+                        });
                     }}
                     onPointerMove={(e) => {
                         const rect = e.target.getBoundingClientRect();
@@ -399,6 +427,65 @@ const MapCanvas = ({
                         mouseRef.current.active = false;
                     }}
                 />
+
+                {/* ✅ Confirmation Popup */}
+                {target && targetPos && (
+                    <div
+                        style={{
+                            position: "absolute",
+                            left: targetPos.px,
+                            top: targetPos.py,
+                            transform: "translate(-50%, -100%) translateY(-10px)",
+                            background: "var(--surface)",
+                            border: "1px solid var(--border)",
+                            boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
+                            borderRadius: 12,
+                            padding: 12,
+                            zIndex: 20,
+                            minWidth: 160,
+                            animation: "popIn 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.28)",
+                        }}
+                    >
+                        <style>{`@keyframes popIn { from { transform: translate(-50%, -100%) translateY(-5px) scale(0.9); opacity:0; } to { transform: translate(-50%, -100%) translateY(-10px) scale(1); opacity:1; } }`}</style>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", marginBottom: 8, textAlign: "center" }}>
+                            Confirm Navigation
+                        </div>
+                        <div style={{ fontSize: 13, color: "var(--text)", textAlign: "center", marginBottom: 12, fontFamily: "'JetBrains Mono', monospace" }}>
+                            X: {target.x_m.toFixed(2)} Y: {target.y_m.toFixed(2)}
+                        </div>
+                        <div style={{ display: "flex", gap: 8 }}>
+                            <button
+                                className="btn btnGhost"
+                                style={{ flex: 1, height: 32, borderRadius: 8, fontSize: 12 }}
+                                onClick={() => setTarget(null)}
+                            >
+                                CANCEL
+                            </button>
+                            <button
+                                className="btn btnPrimary"
+                                style={{ flex: 1, height: 32, borderRadius: 8, fontSize: 12 }}
+                                onClick={() => {
+                                    if (onMapClick) onMapClick(target.x_m, target.y_m);
+                                    setTarget(null);
+                                }}
+                            >
+                                GO
+                            </button>
+                        </div>
+                        {/* Triangle Arrow */}
+                        <div style={{
+                            position: "absolute",
+                            bottom: -6,
+                            left: "50%",
+                            marginLeft: -6,
+                            width: 12, height: 12,
+                            background: "var(--surface)",
+                            borderRight: "1px solid var(--border)",
+                            borderBottom: "1px solid var(--border)",
+                            transform: "rotate(45deg)",
+                        }} />
+                    </div>
+                )}
             </div>
 
             {/* Zoom Footer */}
