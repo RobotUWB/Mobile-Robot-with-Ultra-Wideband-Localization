@@ -8,6 +8,9 @@
 Preferences prefs;
 float bias[4] = { 0, 0, 0, 0 };
 
+// กำหนด HardwareSerial สำหรับส่งข้อมูลไป Control ESP32
+HardwareSerial SerialControl(2); 
+
 // Runtime state
 float fA[4] = { -1, -1, -1, -1 };
 float lastAccepted[4] = { -1, -1, -1, -1 };
@@ -38,7 +41,7 @@ double mp_bias_sum[4] = { 0, 0, 0, 0 };
 int mp_bias_cnt[4] = { 0, 0, 0, 0 };
 int cal_state = 0; 
 
-// [CRITICAL] ประกาศ Mutex ที่นี่ (Global)
+// Mutex สำหรับป้องกันการเข้าถึงข้อมูลพร้อมกัน
 portMUX_TYPE myMutex = portMUX_INITIALIZER_UNLOCKED;
 
 // --- ESP-NOW Vars ---
@@ -74,6 +77,10 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingDataPtr, int len) {
 // =================== MAIN SETUP ===================
 void setup() {
   Serial.begin(115200);
+  
+  // เริ่มต้น Serial สำหรับส่งข้อมูล: RX=26, TX=27
+  SerialControl.begin(115200, SERIAL_8N1, 26, 27);
+  
   delay(500); 
 
   // 1. Setup Web & WiFi 
@@ -84,7 +91,7 @@ void setup() {
   Serial.print("[TAG 1] WiFi Channel: "); Serial.println(WiFi.channel());
   Serial.println("-------------------------------------");
   
-  // เริ่ม ESP-NOW หลังจาก WiFi
+  // เริ่ม ESP-NOW
   if (esp_now_init() == ESP_OK) {
     esp_now_register_recv_cb(esp_now_recv_cb_t(OnDataRecv));
     Serial.println("[ESP-NOW] Init Success");
@@ -94,11 +101,12 @@ void setup() {
 
   // 2. Setup UWB
   setupUWB();
+  Serial.println("[SYSTEM] UWB Tag Ready");
 }
 
 // =================== MAIN LOOP ===================
 void loop() {
-  // --- ย้ายค่าจาก ISR เข้าตัวแปรหลักอย่างปลอดภัย ---
+  // ดึงข้อมูลจาก ISR เข้าสู่ตัวแปรหลักอย่างปลอดภัย
   if (isr_new_data) {
     portENTER_CRITICAL(&myMutex);
     t2_x = isr_t2_x;
@@ -108,15 +116,25 @@ void loop() {
     portEXIT_CRITICAL(&myMutex);
   }
 
-  // [แก้ไข] Priority Logic: ให้ UWB ทำงานหนักกว่า Web
-  // เพื่อป้องกันไม่ให้ UWB ขาดช่วงจน Anchor หลุด
-  
-  loopUWB(); // ทำงานทุกรอบ (Real-time)
+  // ประมวลผล UWB (ลำดับความสำคัญสูงสุด)
+  loopUWB();
 
-  // Web/WiFi ทำงานแค่ทุกๆ 20ms (50Hz) ก็พอ
-  static uint32_t last_web_poll = 0;
-  if (millis() - last_web_poll > 50) {
-      last_web_poll = millis();
+  // ส่งข้อมูล UART และอัปเดต Web ทุกๆ 50ms
+  static uint32_t last_poll_ms = 0;
+  // แก้ไขในไฟล์ UWB_Tag_System.ino ตรง loop()
+if (millis() - last_poll_ms > 50) {
+    last_poll_ms = millis();
+    
+    // ตรวจสอบว่าคำนวณพิกัดได้แล้ว (have_xy)
+    if (have_xy) {
+        SerialControl.print("U,");
+        // คูณ 1000 เพื่อเปลี่ยน เมตร -> มิลลิเมตร (เช่น 1.22 เมตร กลายเป็น 1220)
+        SerialControl.print((int)(x_f * 1000)); 
+        SerialControl.print(",");
+        SerialControl.print((int)(y_f * 1000));
+        SerialControl.print("\n"); // ส่งตัวปิดบรรทัดเพื่อให้โค้ดฝั่งรับทำงานได้
+    }
+
       loopWeb();
   }
 }
