@@ -15,6 +15,7 @@ const MapCanvas = ({
     FIELD_W,
     FIELD_H,
     onMapClick,
+    navTarget,
 }) => {
     const canvasRef = useRef(null);
     const mouseRef = useRef({ x: 0, y: 0, active: false });
@@ -29,6 +30,7 @@ const MapCanvas = ({
     const showTagsRef = useRef(showTags);
     const rangesRef = useRef(ranges);
     const yawOffsetRef = useRef(yawOffset);
+    const navTargetRef = useRef(navTarget);
 
     // Sync Refs with Props
     useEffect(() => { scaleRef.current = scale; }, [scale]);
@@ -37,6 +39,7 @@ const MapCanvas = ({
     useEffect(() => { rangesRef.current = ranges; }, [ranges]);
     useEffect(() => { poseRef.current = pose; }, [pose]);
     useEffect(() => { yawOffsetRef.current = yawOffset; }, [yawOffset]);
+    useEffect(() => { navTargetRef.current = navTarget; }, [navTarget]);
 
     /* --- Helper Functions (Lifted for Render usage) --- */
     const mmToPx = (mm, s) => mm * s;
@@ -263,6 +266,41 @@ const MapCanvas = ({
                 }
             }
 
+            // ✅ Navigation Target Marker
+            const nt = navTargetRef.current;
+            if (nt) {
+                const ntPos = toPx(nt.x_m * 1000, nt.y_m * 1000, cx, cy, s, bounds);
+                const time = Date.now() / 1000;
+                const pulse = 0.5 + 0.5 * Math.sin(time * 3); // 0..1 pulse
+
+                ctx.save();
+                // Outer pulsing ring
+                ctx.strokeStyle = `rgba(239, 68, 68, ${0.3 + pulse * 0.4})`;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(ntPos.px, ntPos.py, 10 + pulse * 6, 0, Math.PI * 2);
+                ctx.stroke();
+
+                // Inner solid dot
+                ctx.fillStyle = "rgba(239, 68, 68, 0.9)";
+                ctx.beginPath();
+                ctx.arc(ntPos.px, ntPos.py, 5, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Crosshair lines
+                ctx.strokeStyle = "rgba(239, 68, 68, 0.5)";
+                ctx.lineWidth = 1;
+                ctx.setLineDash([3, 3]);
+                ctx.beginPath();
+                ctx.moveTo(ntPos.px - 18, ntPos.py);
+                ctx.lineTo(ntPos.px + 18, ntPos.py);
+                ctx.moveTo(ntPos.px, ntPos.py - 18);
+                ctx.lineTo(ntPos.px, ntPos.py + 18);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.restore();
+            }
+
             // ✅ Mouse Hover Tooltip
             if (mouseRef.current.active) {
                 const mx = mouseRef.current.x;
@@ -388,14 +426,23 @@ const MapCanvas = ({
                         cursor: "crosshair",
                     }}
                     onPointerDown={(e) => {
-                        const rect = e.target.getBoundingClientRect();
-                        const scaleX = e.target.width / rect.width;
-                        const scaleY = e.target.height / rect.height;
-                        const x = (e.clientX - rect.left) * scaleX;
-                        const y = (e.clientY - rect.top) * scaleY;
+                        const cvs = canvasRef.current;
+                        const rect = cvs.getBoundingClientRect();
+                        // objectFit:contain → calc actual rendered area
+                        const cvsAR = cvs.width / cvs.height;
+                        const rectAR = rect.width / rect.height;
+                        let rW, rH, oX, oY;
+                        if (rectAR > cvsAR) {
+                            rH = rect.height; rW = rH * cvsAR;
+                            oX = (rect.width - rW) / 2; oY = 0;
+                        } else {
+                            rW = rect.width; rH = rW / cvsAR;
+                            oX = 0; oY = (rect.height - rH) / 2;
+                        }
+                        const x = ((e.clientX - rect.left - oX) / rW) * cvs.width;
+                        const y = ((e.clientY - rect.top - oY) / rH) * cvs.height;
 
                         // Inverse Calculation
-                        const cvs = canvasRef.current;
                         const cx = cvs.width / 2;
                         const cy = cvs.height / 2;
                         const s = scaleRef.current;
@@ -414,12 +461,22 @@ const MapCanvas = ({
                         });
                     }}
                     onPointerMove={(e) => {
-                        const rect = e.target.getBoundingClientRect();
-                        const scaleX = e.target.width / rect.width;
-                        const scaleY = e.target.height / rect.height;
+                        const cvs = canvasRef.current;
+                        const rect = cvs.getBoundingClientRect();
+                        // objectFit:contain → calc actual rendered area
+                        const cvsAR = cvs.width / cvs.height;
+                        const rectAR = rect.width / rect.height;
+                        let rW, rH, oX, oY;
+                        if (rectAR > cvsAR) {
+                            rH = rect.height; rW = rH * cvsAR;
+                            oX = (rect.width - rW) / 2; oY = 0;
+                        } else {
+                            rW = rect.width; rH = rW / cvsAR;
+                            oX = 0; oY = (rect.height - rH) / 2;
+                        }
                         mouseRef.current = {
-                            x: (e.clientX - rect.left) * scaleX,
-                            y: (e.clientY - rect.top) * scaleY,
+                            x: ((e.clientX - rect.left - oX) / rW) * cvs.width,
+                            y: ((e.clientY - rect.top - oY) / rH) * cvs.height,
                             active: true,
                         };
                     }}

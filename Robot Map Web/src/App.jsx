@@ -296,6 +296,7 @@ export default function App() {
   const [isPaused, setIsPaused] = useState(false);
   const [showTags, setShowTags] = useState(true);
   const [toast, setToast] = useState({ show: false, msg: "", type: "info" });
+  const [navTarget, setNavTarget] = useState(null); // { x_m, y_m } — confirmed nav destination
 
   /* --- Refs for Animation Loop --- */
   const anchorsRef = useRef(anchors);
@@ -810,6 +811,7 @@ export default function App() {
     // Send via WebSocket (Control ESP)
     if (wsCmdRef.current && wsCmdRef.current.readyState === WebSocket.OPEN) {
       wsCmdRef.current.send(cmdVal);
+      setNavTarget({ x_m: x, y_m: y }); // ✅ Show marker on map
       showToast(`Going to X:${x.toFixed(2)} Y:${y.toFixed(2)}`, "info");
     } else {
       showToast("Control WS not connected", "error");
@@ -994,6 +996,33 @@ export default function App() {
               stopHoldRelease={stopHoldRelease}
             />
 
+            {/* Navigation Target */}
+            {navTarget && (
+              <div className="panel" style={{ padding: "14px 16px" }}>
+                <div className="sectionTitle">NAVIGATION TARGET</div>
+                <div style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 10,
+                }}>
+                  <div style={{
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 14,
+                    color: "var(--text)",
+                  }}>
+                    🔴 X: {navTarget.x_m.toFixed(2)}  Y: {navTarget.y_m.toFixed(2)}
+                  </div>
+                  <button
+                    className="btn btnGhost"
+                    style={{ height: 28, padding: "0 10px", borderRadius: 8, fontSize: 11 }}
+                    onClick={() => setNavTarget(null)}
+                  >
+                    CLEAR
+                  </button>
+                </div>
+              </div>
+            )}
             {/* Controls (ล่างสุด) */}
             <div style={{ marginTop: "auto", display: "grid", gap: 10 }}>
               <button
@@ -1067,6 +1096,7 @@ export default function App() {
             FIELD_W={FIELD_W}
             FIELD_H={FIELD_H}
             onMapClick={handleMapClick}
+            navTarget={navTarget}
           />
         </div>
       </div>
