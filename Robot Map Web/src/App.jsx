@@ -368,10 +368,17 @@ export default function App() {
   };
 
   const calDirection = () => {
-    // เซ็ตให้มุมปัจจุบันของหุ่น กลายเป็น 0 (หันซ้าย)
-    const currentYaw = pose.yaw || 0;
-    setYawOffset(currentYaw);
-    showToast("CAL DIRECTION OK", "success");
+    // Check if WS is connected for hardware ZERO
+    if (wsCmdRef.current && wsCmdRef.current.readyState === WebSocket.OPEN) {
+      wsCmdRef.current.send("SET_ZERO");
+      setYawOffset(0); // Hardware is zeroed, so local offset is 0
+      // Toast will come from ESP32 ACK response
+    } else {
+      // Fallback: Local offset only
+      const currentYaw = pose.yaw || 0;
+      setYawOffset(currentYaw);
+      showToast("CAL DIRECTION (LOCAL ONLY)", "warning");
+    }
   };
 
   /* ================== MANUAL DRIVE LOGIC ================== */
@@ -745,6 +752,14 @@ export default function App() {
         try {
           if (event.data === "PONG") return;
           const j = JSON.parse(event.data);
+
+          // ✅ Handle ACK responses from ESP32
+          if (j.type === "ack") {
+            const status = j.status === "success" ? "success" : "error";
+            showToast(`${j.cmd}: ${j.status}`, status);
+            return;
+          }
+
           const angle = Number(j.angle);
           if (Number.isFinite(angle)) {
             setPose((prev) => ({ ...prev, yaw: angle }));
