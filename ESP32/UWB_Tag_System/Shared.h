@@ -21,10 +21,10 @@ static constexpr float FIELD_H = 2.00f;
 
 // ===== Heights (meters) =====
 static constexpr float TAG_Z = 0.315f; 
-static constexpr float AZ[4] = { 1.00f, 1.00f, 1.00f, 1.00f }; 
+static constexpr float AZ[4] = { 0.70f, 0.70f, 0.70f, 0.70f }; 
 
 // [แนะนำ] หากขับใกล้เสาแล้วหลุด ให้ลองเปลี่ยนเป็น false เพื่อทดสอบ
-static constexpr bool USE_2D_HEIGHT_CORR = false;
+static constexpr bool USE_2D_HEIGHT_CORR = true;
 
 static constexpr float AX[4] = { 0.00f, 0.00f, 3.00f, 3.00f };
 static constexpr float AY[4] = { 0.00f, 2.00f, 0.00f, 2.00f };
