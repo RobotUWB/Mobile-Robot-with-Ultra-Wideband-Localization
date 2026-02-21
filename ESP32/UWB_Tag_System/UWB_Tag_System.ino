@@ -63,6 +63,7 @@ typedef struct struct_message {
 
 struct_message incomingData;
 
+// ฟังก์ชัน Callback เมื่อได้รับข้อมูล ESP-NOW
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingDataPtr, int len) {
   if (len != sizeof(incomingData)) return;
   memcpy(&incomingData, incomingDataPtr, sizeof(incomingData));

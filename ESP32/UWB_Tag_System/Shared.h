@@ -24,7 +24,7 @@ static constexpr float TAG_Z = 0.315f;
 static constexpr float AZ[4] = { 1.00f, 1.00f, 1.00f, 1.00f }; 
 
 // [แนะนำ] หากขับใกล้เสาแล้วหลุด ให้ลองเปลี่ยนเป็น false เพื่อทดสอบ
-static constexpr bool USE_2D_HEIGHT_CORR = true;
+static constexpr bool USE_2D_HEIGHT_CORR = false;
 
 static constexpr float AX[4] = { 0.00f, 0.00f, 3.00f, 3.00f };
 static constexpr float AY[4] = { 0.00f, 2.00f, 0.00f, 2.00f };
@@ -47,8 +47,8 @@ static constexpr float XY_ALPHA_MIN  = 0.10f;
 static constexpr float XY_ALPHA_MAX  = 0.60f;
 
 // =================== POSITION GATING ===================
-static constexpr float RMSE_GATE_M = 1.00f;
-static constexpr float RMSE_HARD_M = 2.00f;
+static constexpr float RMSE_GATE_M = 1.50f;
+static constexpr float RMSE_HARD_M = 3.00f;
 static constexpr float MAX_STEP_M = 0.50f; 
 
 // =================== TIMING ===================
