@@ -185,32 +185,62 @@ static int worstResidualIndex(const Meas *m, int n, float x, float y) {
 
 // =================== DW1000 CALLBACKS ===================
 void newRange() {
-  uint16_t sa = DW1000Ranging.getDistantDevice()->getShortAddress();
-  float d = DW1000Ranging.getDistantDevice()->getRange();
-  if (!validRange(d)) return;
+  DW1000Device *dev = DW1000Ranging.getDistantDevice();
+  if (!dev) return;
 
+  uint16_t sa = dev->getShortAddress();
   int id = idFromShort(sa);
-  if (id < 0) return;
+  if (id < 0 || id >= 4) return;
 
-  float d_corr = d - bias[id];
-  if (!validRange(d_corr)) return;
-
-  if (validRange(lastAccepted[id])) {
-    if (fabs(d_corr - lastAccepted[id]) > MAX_JUMP_M) {
-      aStat[id] = -2;
-      return;
-    }
+  float d = dev->getRange();
+  if (!validRange(d)) {
+    aStat[id] = -1;
+    return;
   }
 
-  aStat[id] = 0;
-  lastAccepted[id] = d_corr;
+  float d_corr = d - bias[id];
+  if (!validRange(d_corr)) {
+    aStat[id] = -1;
+    return;
+  }
+
+  // DEBUG
+  static uint32_t dbgMs = 0;
+  if (millis() - dbgMs > 100) {
+    dbgMs = millis();
+    Serial.printf("[DBG] id=%d raw=%.3f bias=%.3f corr=%.3f\n", id, d, bias[id], d_corr);
+  }
 
   buf[id][buf_i[id]] = d_corr;
   buf_i[id] = (buf_i[id] + 1) % MED_N;
   if (buf_fill[id] < MED_N) buf_fill[id]++;
 
-  float med = (buf_fill[id] >= 3) ? medianN(buf[id], buf_fill[id]) : d_corr;
-  fA[id] = emaUpdateRange(fA[id], med);
+  float d_med = (buf_fill[id] >= 3) ? medianN(buf[id], buf_fill[id]) : d_corr;
+  if (!validRange(d_med)) {
+    aStat[id] = -1;
+    return;
+  }
+
+  // jump reject
+  if (validRange(lastAccepted[id])) {
+    if (fabs(d_med - lastAccepted[id]) > MAX_JUMP_M) {
+      aStat[id] = -2;
+
+      // clear anchor นี้ออกไปก่อนไม่ใช้ค่าเก่า
+      fA[id] = -1;
+      lastAccepted[id] = -1;
+      tA[id] = 0;
+      buf_fill[id] = 0;
+      buf_i[id] = 0;
+
+      return;
+    }
+  }
+
+  // accept + EMA
+  aStat[id] = 0;
+  lastAccepted[id] = d_med;
+  fA[id] = emaUpdateRange(fA[id], d_med);
   tA[id] = millis();
 
   if (cal_active && validRange(fA[id])) {
@@ -223,12 +253,32 @@ void newDevice(DW1000Device *device) {
   uint16_t sa = device->getShortAddress();
   int id = idFromShort(sa);
   Serial.printf("[TAG1] Connected anchor SA=0x%04X -> id=%d\n", sa, id);
+
+  if (id >= 0 && id < 4) {
+    // reset filter/state ของ anchor ตัวนี้ตอน reconnect
+    fA[id] = -1;
+    lastAccepted[id] = -1;
+    tA[id] = 0;
+    aStat[id] = 0;
+    buf_fill[id] = 0;
+    buf_i[id] = 0;
+  }
 }
 
 void inactiveDevice(DW1000Device *device) {
   uint16_t sa = device->getShortAddress();
   int id = idFromShort(sa);
   Serial.printf("[TAG1] Anchor inactive SA=0x%04X -> id=%d\n", sa, id);
+
+  if (id >= 0 && id < 4) {
+    // clear ค่า range เก่า
+    fA[id] = -1;
+    lastAccepted[id] = -1;
+    tA[id] = 0;
+    aStat[id] = -1;
+    buf_fill[id] = 0;
+    buf_i[id] = 0;
+  }
 }
 
 // =================== SERIAL CMD ===================
@@ -271,7 +321,17 @@ void handleSerial() {
 
   if (line == "RESET") {
     cal_active = false;
-    for (int i = 0; i < 4; i++) { bias[i] = 0; mp_bias_sum[i] = 0; mp_bias_cnt[i] = 0; fA[i] = -1; lastAccepted[i] = -1; buf_fill[i] = 0; }
+    for (int i = 0; i < 4; i++) {
+      bias[i] = 0;
+      mp_bias_sum[i] = 0;
+      mp_bias_cnt[i] = 0;
+      fA[i] = -1;
+      lastAccepted[i] = -1;
+      tA[i] = 0;
+      aStat[i] = -1;
+      buf_fill[i] = 0;
+      buf_i[i] = 0;
+    }
     saveBias(); cal_state = 4;
     Serial.println("[CAL] Reset done.");
     return;
@@ -337,10 +397,14 @@ void loopUWB() {
 
   // Anchor timeout
   uint32_t now = millis();
-  for (int i = 0; i < 4; i++) {
-    if (validRange(fA[i]) && (now - tA[i] > ANCHOR_TIMEOUT_MS)) {
+  for (int i = 0; i < 4; ++i) {
+    if (tA[i] != 0 && (now - tA[i] > ANCHOR_TIMEOUT_MS)) {
       fA[i] = -1;
+      lastAccepted[i] = -1;
+      tA[i] = 0;
       aStat[i] = -1;
+      buf_fill[i] = 0;
+      buf_i[i] = 0;
     }
   }
 

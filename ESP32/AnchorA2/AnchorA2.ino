@@ -94,17 +94,23 @@ void newRange() {
   Serial.println(" m");
 }
 
-void newDevice(DW1000Device *device) {
-  Serial.print("[ANCHOR A2] Connected TAG: 0x");
-  Serial.println(device->getShortAddress(), HEX);
-
-  // reset filter เมื่อมี device ใหม่
+static void resetFilterState() {
   have_last = false;
   last_ok = NAN;
   ema_range = NAN;
 }
 
+
+void newDevice(DW1000Device *device) {
+  Serial.print("[ANCHOR A2] Connected TAG: 0x");
+  Serial.println(device->getShortAddress(), HEX);
+
+  resetFilterState();
+}
+
 void inactiveDevice(DW1000Device *device) {
   Serial.print("[ANCHOR A2] TAG inactive: 0x");
   Serial.println(device->getShortAddress(), HEX);
+
+  resetFilterState();
 }
