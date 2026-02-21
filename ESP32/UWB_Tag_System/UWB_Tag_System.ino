@@ -71,7 +71,7 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingDataPtr, int len) {
     isr_t2_x = incomingData.x;
     isr_t2_y = incomingData.y;
     isr_t2_last_ms = millis();
-    isr_new_data = true; 
+    isr_new_data = true;
   }
 }
 
@@ -91,7 +91,7 @@ void setup() {
   Serial.print("[TAG 1] WiFi SSID: "); Serial.println(WiFi.SSID());
   Serial.print("[TAG 1] WiFi Channel: "); Serial.println(WiFi.channel());
   Serial.println("-------------------------------------");
-  
+
   // เริ่ม ESP-NOW
   if (esp_now_init() == ESP_OK) {
     esp_now_register_recv_cb(esp_now_recv_cb_t(OnDataRecv));
@@ -136,6 +136,6 @@ if (millis() - last_poll_ms > 50) {
         SerialControl.print("\n"); // ส่งตัวปิดบรรทัดเพื่อให้โค้ดฝั่งรับทำงานได้
     }
 
-      loopWeb();
-  }
+    loopWeb();
+}
 }

@@ -7,7 +7,7 @@ uint16_t Adelay = 16464;
 
 #define SPI_SCK  18
 #define SPI_MISO 19
-#define SPI_MOSI 21
+#define SPI_MOSI 23
 #define DW_CS    5
 
 const uint8_t PIN_RST = 22;
