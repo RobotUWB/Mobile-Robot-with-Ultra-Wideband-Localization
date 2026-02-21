@@ -57,3 +57,5 @@ logs/
 # Misc
 *.bak
 *.tmp
+
+.agent

@@ -14,11 +14,21 @@ WebSocketsServer webSocket = WebSocketsServer(WEBSOCKET_PORT);
 
 // --- Variables ---
 float currentAngle = 0.0;
+float angleOffset = 0.0; // Heading calibration offset
 unsigned long previousWiFiCheck = 0;
 bool isWiFiConnected = false;
 
 float currentX = 0.0;
 float currentY = 0.0;
+
+// --- Navigation Variables ---
+float targetX = 0.0;
+float targetY = 0.0;
+bool isNavigating = false;
+unsigned long lastNavUpdate = 0;
+const int NAV_UPDATE_INTERVAL = 100; // 10Hz
+const float DIST_THRESHOLD = 0.20;   // 20cm accepted error
+
 
 // --- Serial Buffer ---
 char inputBuffer[MAX_SERIAL_BUFFER];
@@ -91,6 +101,17 @@ void sendToSTM32(String cmd) {
   }
 }
 
+void sendToSTM32SerialOnly(String serialCmd) {
+  if(serialCmd != "") {
+    // Serial.println("Sending to STM32: " + serialCmd); // Debug
+    uint8_t cs = 0;
+    for (int i = 0; i < serialCmd.length(); i++) cs ^= serialCmd[i];
+    char buf[10];
+    sprintf(buf, "*%02X\n", cs);
+    STM32Serial.print(serialCmd + String(buf));
+  }
+}
+
 void checkSTM32() {
   while (STM32Serial.available()) {
     char c = STM32Serial.read();
@@ -116,7 +137,18 @@ void checkSTM32() {
         
         if (calcCs == recvCs) {
           if (payload.startsWith("A=")) {
-            currentAngle = payload.substring(2).toFloat();
+            float rawAngle = payload.substring(2).toFloat();
+            // Normalize raw to 0-360 first
+            while (rawAngle >= 360) rawAngle -= 360;
+            while (rawAngle < 0)    rawAngle += 360;
+            
+            // Apply Calibration Offset
+            currentAngle = rawAngle - angleOffset;
+            
+            // Re-normalize result
+            while (currentAngle >= 360) currentAngle -= 360;
+            while (currentAngle < 0)    currentAngle += 360;
+
             String json = "{\"type\":\"data\", \"angle\":" + String(currentAngle) + "}";
             webSocket.broadcastTXT(json);
           }
@@ -193,16 +225,23 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
       lastWebHeartbeat = millis(); 
       break;
     case WStype_TEXT: {
-      String payloadStr = String((char*)payload);
+      String payloadStr = "";
+      for (size_t i = 0; i < length; i++) {
+        payloadStr += (char)payload[i];
+      }
+      payloadStr.trim(); 
+
+      // หลังจากนั้นให้ใช้ลอจิกเดิมต่อไป
       if (payloadStr == "PING") {
         lastWebHeartbeat = millis();
         webSocket.broadcastTXT("PONG");
-      } 
+      }
       else if (payloadStr.startsWith("UWB")) { 
         // Optional: Manual Bridge for UWB commands
         UWBSerial.println(payloadStr);
       }
       else if (payloadStr.startsWith("GOTO:")) { // Format: GOTO:x:y
+        Serial.println("RX GOTO: " + payloadStr); // Debug Crash
         int firstColon = payloadStr.indexOf(':');
         int secondColon = payloadStr.indexOf(':', firstColon + 1);
         if (secondColon > 0) {
@@ -211,12 +250,38 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
            targetX = xStr.toFloat();
            targetY = yStr.toFloat();
            isNavigating = true;
-           Serial.println("Nav Started -> Target: " + String(targetX) + ", " + String(targetY));
+           Serial.println("Nav Set -> X:" + String(targetX) + " Y:" + String(targetY));
+        } else {
+           Serial.println("GOTO Format Error");
         }
       }
       else if (payloadStr == "STOP") {
         isNavigating = false;
         sendToSTM32("STOP");
+      }
+      else if (payloadStr == "SET_ZERO") {
+         // Auto-calibrate: Set current raw angle as new Zero
+         angleOffset += currentAngle;
+         
+         // Normalize offset
+         while (angleOffset >= 360) angleOffset -= 360;
+         while (angleOffset < 0)    angleOffset += 360;
+         
+         // Force current to 0 immediately for responsiveness
+         currentAngle = 0.0;
+         
+         // อัปเดตค่ามุมให้หน้าเว็บกลับเป็น 0 ทันที
+         webSocket.broadcastTXT("{\"type\":\"data\", \"angle\":0.0}");
+         
+         // --- เพิ่มบรรทัดนี้ ---
+         // ส่ง ACK ยืนยันกลับไปให้ฝั่ง Web Dev เอาไปใช้งานต่อ
+         webSocket.broadcastTXT("{\"type\":\"ack\", \"cmd\":\"SET_ZERO\", \"status\":\"success\"}");
+         
+         Serial.println("Heading Calibrated. Zero Set.");
+      }
+      else if (payloadStr == "H") {
+         // Heartbeat: forward to STM32 but DON'T stop navigation
+         sendToSTM32("H");
       }
       else { 
         // Manual Drive overrides Auto Nav
@@ -263,13 +328,6 @@ void setup() {
   Serial.println("System Ready. Full Protocol Active.");
 }
 
-// --- Navigation Variables ---
-float targetX = 0.0;
-float targetY = 0.0;
-bool isNavigating = false;
-unsigned long lastNavUpdate = 0;
-const int NAV_UPDATE_INTERVAL = 100; // 10Hz
-const float DIST_THRESHOLD = 0.20;   // 20cm accepted error
 
 // --- Navigation Logic ---
 void runNavigation() {
@@ -294,33 +352,62 @@ void runNavigation() {
   }
 
   // 2. Calculate Heading Error
+  // currentAngle: 0° = -X (หลัง SET_ZERO ตอนหัน -X), CCW+
+  // atan2:        0° = +X, CCW+
+  // แปลง: worldAngle = currentAngle + 180°
+  float worldAngle = currentAngle + 180.0;
+  while (worldAngle >= 360) worldAngle -= 360;
+  while (worldAngle < 0)    worldAngle += 360;
+
   float desiredAngle = atan2(dy, dx) * 180.0 / PI;
-  float angleError = desiredAngle - currentAngle;
+  // Normalize desiredAngle to 0-360 (atan2 returns -180 to 180)
+  while (desiredAngle < 0)    desiredAngle += 360;
+  while (desiredAngle >= 360) desiredAngle -= 360;
+
+  float angleError = desiredAngle - worldAngle;
   
-  // Normalize angle (-180 to 180)
+  // Normalize angle error (-180 to 180)
   while (angleError > 180) angleError -= 360;
   while (angleError < -180) angleError += 360;
 
   // 3. Control Logic (Simple Proportional)
   float kp_v = 300.0; // Speed gain
-  float kp_w = 4.0;   // Turn gain
+  float kp_w = 2.0;    // Turn Gain (positive w = CCW = left)
   
   float cmd_v = 0;
   float cmd_w = 0;
 
-  if (abs(angleError) > 20.0) {
+  if (abs(angleError) > 10.0) {
     // If facing wrong way, turn in place first
     cmd_v = 0;
     cmd_w = angleError * kp_w;
   } else {
     // If facing roughly correct, drive and correct
     cmd_v = distance * kp_v;
-    if (cmd_v > 300) cmd_v = 300; // Max speed limit
+    
+    // --- Deadzone Fix: Minimum Speed (Safe Mode) ---
+    if (cmd_v < 150) cmd_v = 150; // Force min speed to overcome friction
+    if (cmd_v > 300) cmd_v = 300; // Cap max speed to prevent Brownout
+    
     cmd_w = angleError * kp_w;
   }
 
-  // Debug
-  // Serial.printf("Nav: Dist=%.2f AngErr=%.2f -> V=%.0f W=%.0f\n", distance, angleError, cmd_v, cmd_w);
+  // --- Safety: Clamp Angular Speed ---
+  if (cmd_w > 150) cmd_w = 150;
+  if (cmd_w < -150) cmd_w = -150;
+
+  // Debug - Check values
+  Serial.printf("Nav: Pos=(%.3f,%.3f) Tgt=(%.3f,%.3f) Dist=%.2f\n", 
+                currentX, currentY, targetX, targetY, distance);
+  Serial.printf("     DesAng=%.1f WorldAng=%.1f CalAng=%.1f AngErr=%.1f | V=%.0f W=%.0f\n", 
+                desiredAngle, worldAngle, currentAngle, angleError, cmd_v, cmd_w);
+  
+  // Optional: Send Debug to Web for easier viewing
+  String debugJson = "{\"type\":\"nav_debug\", \"dist\":" + String(distance) + 
+                     ", \"err\":" + String(angleError) + 
+                     ", \"v\":" + String(cmd_v) + 
+                     ", \"w\":" + String(cmd_w) + "}";
+  webSocket.broadcastTXT(debugJson);
 
   // 4. Send to STM32
   // Command format: V,linear_velocity,angular_velocity
@@ -328,15 +415,6 @@ void runNavigation() {
   sendToSTM32SerialOnly(cmd); // New function to avoid broadcast loop
 }
 
-void sendToSTM32SerialOnly(String serialCmd) {
-  if(serialCmd != "") {
-    uint8_t cs = 0;
-    for (int i = 0; i < serialCmd.length(); i++) cs ^= serialCmd[i];
-    char buf[10];
-    sprintf(buf, "*%02X\n", cs);
-    STM32Serial.print(serialCmd + String(buf));
-  }
-}
 
 void loop() {
   ArduinoOTA.handle();
