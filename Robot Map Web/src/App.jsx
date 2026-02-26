@@ -297,6 +297,7 @@ export default function App() {
   const [showTags, setShowTags] = useState(true);
   const [toast, setToast] = useState({ show: false, msg: "", type: "info" });
   const [navTarget, setNavTarget] = useState(null); // { x_m, y_m } — confirmed nav destination
+  const [clearPathTrigger, setClearPathTrigger] = useState(0); // Tell MapCanvas to clear drawn path
 
   /* --- Refs for Animation Loop --- */
   const anchorsRef = useRef(anchors);
@@ -818,6 +819,29 @@ export default function App() {
     }
   };
 
+  const handleRouteComplete = (pathPoints) => {
+    if (wsCmdRef.current && wsCmdRef.current.readyState === WebSocket.OPEN) {
+      if (pathPoints.length === 0) return;
+
+      // Limit to 50 points per user requirement
+      const limited = pathPoints.slice(0, 50);
+
+      // Map to x:y format
+      const pointStrings = limited.map(pt => `${pt.x_m.toFixed(2)}:${pt.y_m.toFixed(2)}`);
+      const cmdStr = `GOTO:${pointStrings.join(':')}`;
+
+      // Set target to the final destination point for the UI marker
+      const finalDest = limited[limited.length - 1];
+      setNavTarget({ x_m: finalDest.x_m, y_m: finalDest.y_m });
+
+      wsCmdRef.current.send(cmdStr);
+      showToast(`Started Route (${limited.length} points)`, "info");
+    } else {
+      showToast("Control WS not connected", "error");
+    }
+  };
+
+
   return (
     <>
       <GlobalStyles />
@@ -1016,7 +1040,12 @@ export default function App() {
                   <button
                     className="btn btnGhost"
                     style={{ height: 28, padding: "0 10px", borderRadius: 8, fontSize: 11 }}
-                    onClick={() => setNavTarget(null)}
+                    onClick={() => {
+                      setNavTarget(null);
+                      setClearPathTrigger(prev => prev + 1); // Tell MapCanvas to clear path
+                      sendDriveCmd("STOP"); // Stop robot if clearing active route
+                      showToast("Route Cleared", "info");
+                    }}
                   >
                     CLEAR
                   </button>
@@ -1096,7 +1125,9 @@ export default function App() {
             FIELD_W={FIELD_W}
             FIELD_H={FIELD_H}
             onMapClick={handleMapClick}
+            onRouteComplete={handleRouteComplete}
             navTarget={navTarget}
+            clearPathTrigger={clearPathTrigger}
           />
         </div>
       </div>

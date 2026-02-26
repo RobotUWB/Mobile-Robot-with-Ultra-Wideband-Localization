@@ -15,13 +15,21 @@ const MapCanvas = ({
     FIELD_W,
     FIELD_H,
     onMapClick,
+    onRouteComplete,
     navTarget,
+    clearPathTrigger,
 }) => {
     const canvasRef = useRef(null);
     const mouseRef = useRef({ x: 0, y: 0, active: false });
 
-    // ✅ NEW: Target for Confirmation
+    // ✅ Target for Confirmation
     const [target, setTarget] = useState(null); // { x_m, y_m, px, py }
+
+    // ✅ Tools System
+    const [activeTool, setActiveTool] = useState("point"); // "point" | "draw"
+    const [drawPath, setDrawPath] = useState([]); // [{x_m, y_m}]
+    const drawPathRef = useRef([]); // Required for requestAnimationFrame closure
+    const isDrawingRef = useRef(false);
 
     // Refs for Animation Loop to avoid dependency staleness
     const scaleRef = useRef(scale);
@@ -40,6 +48,15 @@ const MapCanvas = ({
     useEffect(() => { poseRef.current = pose; }, [pose]);
     useEffect(() => { yawOffsetRef.current = yawOffset; }, [yawOffset]);
     useEffect(() => { navTargetRef.current = navTarget; }, [navTarget]);
+    useEffect(() => { drawPathRef.current = drawPath; }, [drawPath]);
+
+    // Clear path when requested by parent
+    useEffect(() => {
+        if (clearPathTrigger > 0) {
+            setDrawPath([]);
+            drawPathRef.current = [];
+        }
+    }, [clearPathTrigger]);
 
     /* --- Helper Functions (Lifted for Render usage) --- */
     const mmToPx = (mm, s) => mm * s;
@@ -266,6 +283,33 @@ const MapCanvas = ({
                 }
             }
 
+            // ✅ Route Drawing Path
+            const currentDrawPath = drawPathRef.current;
+            if (currentDrawPath.length > 0) {
+                ctx.save();
+                ctx.strokeStyle = "rgba(239, 68, 68, 0.8)"; // Red path
+                ctx.lineWidth = 4;
+                ctx.lineCap = "round";
+                ctx.lineJoin = "round";
+                ctx.beginPath();
+                for (let i = 0; i < currentDrawPath.length; i++) {
+                    const pt = toPx(currentDrawPath[i].x_m * 1000, currentDrawPath[i].y_m * 1000, cx, cy, s, bounds);
+                    if (i === 0) ctx.moveTo(pt.px, pt.py);
+                    else ctx.lineTo(pt.px, pt.py);
+                }
+                ctx.stroke();
+
+                // Draw dots at each captured point
+                ctx.fillStyle = "rgba(239, 68, 68, 1)";
+                for (let i = 0; i < currentDrawPath.length; i++) {
+                    const pt = toPx(currentDrawPath[i].x_m * 1000, currentDrawPath[i].y_m * 1000, cx, cy, s, bounds);
+                    ctx.beginPath();
+                    ctx.arc(pt.px, pt.py, 3, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                ctx.restore();
+            }
+
             // ✅ Navigation Target Marker
             const nt = navTargetRef.current;
             if (nt) {
@@ -391,6 +435,52 @@ const MapCanvas = ({
                     zIndex: 10,
                 }}
             >
+                <div style={{
+                    display: "flex",
+                    background: "rgba(255, 255, 255, 0.05)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 10,
+                    overflow: "hidden"
+                }}>
+                    <button
+                        onClick={() => {
+                            setActiveTool("point");
+                            setDrawPath([]);
+                        }}
+                        style={{
+                            height: 36,
+                            padding: "0 12px",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            border: "none",
+                            background: activeTool === "point" ? "var(--accent)" : "transparent",
+                            color: activeTool === "point" ? "#fff" : "var(--muted)",
+                            cursor: "pointer"
+                        }}
+                    >
+                        📍 Point
+                    </button>
+                    <button
+                        onClick={() => {
+                            setActiveTool("draw");
+                            setTarget(null);
+                        }}
+                        style={{
+                            height: 36,
+                            padding: "0 12px",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            border: "none",
+                            borderLeft: "1px solid var(--border)",
+                            background: activeTool === "draw" ? "rgba(239, 68, 68, 0.5)" : "transparent",
+                            color: activeTool === "draw" ? "#fff" : "var(--muted)",
+                            cursor: "pointer"
+                        }}
+                    >
+                        ✏️ Draw
+                    </button>
+                </div>
+
                 <button
                     onClick={() => setShowTags(!showTags)}
                     className="btn btnGhost"
@@ -453,12 +543,17 @@ const MapCanvas = ({
 
                         const mmX = (x - cx) / s + midX;
                         const mmY = midY - (y - cy) / s;
+                        const x_m = mmX / 1000;
+                        const y_m = mmY / 1000;
 
-                        // Set Target for Confirmation
-                        setTarget({
-                            x_m: mmX / 1000,
-                            y_m: mmY / 1000
-                        });
+                        if (activeTool === "point") {
+                            // Set Target for Confirmation
+                            setTarget({ x_m, y_m });
+                        } else if (activeTool === "draw") {
+                            // Start drawing a route
+                            isDrawingRef.current = true;
+                            setDrawPath([{ x_m, y_m }]);
+                        }
                     }}
                     onPointerMove={(e) => {
                         const cvs = canvasRef.current;
@@ -474,14 +569,64 @@ const MapCanvas = ({
                             rW = rect.width; rH = rW / cvsAR;
                             oX = 0; oY = (rect.height - rH) / 2;
                         }
-                        mouseRef.current = {
-                            x: ((e.clientX - rect.left - oX) / rW) * cvs.width,
-                            y: ((e.clientY - rect.top - oY) / rH) * cvs.height,
-                            active: true,
-                        };
+
+                        const pointerX = ((e.clientX - rect.left - oX) / rW) * cvs.width;
+                        const pointerY = ((e.clientY - rect.top - oY) / rH) * cvs.height;
+
+                        mouseRef.current = { x: pointerX, y: pointerY, active: true };
+
+                        if (activeTool === "draw" && isDrawingRef.current) {
+                            // Inverse Calculation
+                            const cx = cvs.width / 2;
+                            const cy = cvs.height / 2;
+                            const s = scaleRef.current;
+                            const bounds = getBoundsFromAnchors(anchorsRef.current);
+                            const midX = (bounds.minX + bounds.maxX) / 2;
+                            const midY = (bounds.minY + bounds.maxY) / 2;
+
+                            const mmX = (pointerX - cx) / s + midX;
+                            const mmY = midY - (pointerY - cy) / s;
+                            const cur_x = mmX / 1000;
+                            const cur_y = mmY / 1000;
+
+                            setDrawPath(prev => {
+                                if (prev.length === 0) {
+                                    return [{ x_m: cur_x, y_m: cur_y }];
+                                }
+                                const last = prev[prev.length - 1];
+                                // Add point if moved at least 0.2 meters
+                                const dist = Math.hypot(cur_x - last.x_m, cur_y - last.y_m);
+                                if (dist > 0.2) {
+                                    return [...prev, { x_m: cur_x, y_m: cur_y }];
+                                }
+                                return prev;
+                            });
+                        }
+                    }}
+                    onPointerUp={() => {
+                        if (activeTool === "draw" && isDrawingRef.current) {
+                            isDrawingRef.current = false;
+
+                            // Send full route to execute
+                            if (drawPath.length > 1 && onRouteComplete) {
+                                onRouteComplete(drawPath);
+                                // ✅ Tool remains "draw" as requested
+                            } else {
+                                setDrawPath([]); // Too short, discard
+                            }
+                        }
                     }}
                     onPointerLeave={() => {
                         mouseRef.current.active = false;
+                        if (activeTool === "draw" && isDrawingRef.current) {
+                            isDrawingRef.current = false;
+
+                            if (drawPath.length > 1 && onRouteComplete) {
+                                onRouteComplete(drawPath);
+                            } else {
+                                setDrawPath([]); // Too short
+                            }
+                        }
                     }}
                 />
 
