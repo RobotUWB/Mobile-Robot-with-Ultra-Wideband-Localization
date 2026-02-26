@@ -299,6 +299,15 @@ export default function App() {
   const [navTarget, setNavTarget] = useState(null); // { x_m, y_m } — confirmed nav destination
   const [clearPathTrigger, setClearPathTrigger] = useState(0); // Tell MapCanvas to clear drawn path
 
+  // Deadzones Configuration
+  const [showDeadZones, setShowDeadZones] = useState(false);
+  const [deadZones, setDeadZones] = useState({
+    A1: 50, // cm
+    A2: 30, // cm
+    A3: 50, // cm
+    A4: 30, // cm
+  });
+
   /* --- Refs for Animation Loop --- */
   const anchorsRef = useRef(anchors);
   const missedHeartbeatsRef = useRef(0); // ✅ Heartbeat Counter
@@ -1020,6 +1029,56 @@ export default function App() {
               stopHoldRelease={stopHoldRelease}
             />
 
+            {/* Dead Zones Config */}
+            <div className="panel" style={{ padding: "14px 16px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <div className="sectionTitle" style={{ marginBottom: 0 }}>DEAD ZONES CONFIG</div>
+                <button
+                  onClick={() => setShowDeadZones(!showDeadZones)}
+                  className="btn btnGhost"
+                  style={{
+                    height: 28,
+                    padding: "0 10px",
+                    borderRadius: 8,
+                    fontSize: 11,
+                    color: showDeadZones ? "rgba(239, 68, 68, 1)" : "inherit",
+                    background: showDeadZones ? "rgba(239, 68, 68, 0.15)" : "transparent"
+                  }}
+                >
+                  {showDeadZones ? "HIDE" : "SHOW"}
+                </button>
+              </div>
+
+              {showDeadZones && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  {["A1", "A2", "A3", "A4"].map(anchor => (
+                    <div key={anchor} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "rgba(0,0,0,0.2)", padding: "6px 10px", borderRadius: 8 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{anchor}</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <button
+                          className="btn btnGhost"
+                          style={{ width: 24, height: 24, padding: 0, minWidth: 24, borderRadius: 4 }}
+                          onClick={() => setDeadZones(prev => ({ ...prev, [anchor]: Math.max(0, prev[anchor] - 10) }))}
+                        >
+                          -
+                        </button>
+                        <span style={{ fontSize: 13, width: 36, textAlign: "center", fontFamily: "'JetBrains Mono', monospace" }}>
+                          {deadZones[anchor]}cm
+                        </span>
+                        <button
+                          className="btn btnGhost"
+                          style={{ width: 24, height: 24, padding: 0, minWidth: 24, borderRadius: 4 }}
+                          onClick={() => setDeadZones(prev => ({ ...prev, [anchor]: prev[anchor] + 10 }))}
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             {/* Navigation Target */}
             {navTarget && (
               <div className="panel" style={{ padding: "14px 16px" }}>
@@ -1128,6 +1187,8 @@ export default function App() {
             onRouteComplete={handleRouteComplete}
             navTarget={navTarget}
             clearPathTrigger={clearPathTrigger}
+            showDeadZones={showDeadZones}
+            deadZones={deadZones}
           />
         </div>
       </div>

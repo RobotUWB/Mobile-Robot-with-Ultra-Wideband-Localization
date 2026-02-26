@@ -18,6 +18,8 @@ const MapCanvas = ({
     onRouteComplete,
     navTarget,
     clearPathTrigger,
+    showDeadZones,
+    deadZones,
 }) => {
     const canvasRef = useRef(null);
     const mouseRef = useRef({ x: 0, y: 0, active: false });
@@ -30,6 +32,10 @@ const MapCanvas = ({
     const [drawPath, setDrawPath] = useState([]); // [{x_m, y_m}]
     const drawPathRef = useRef([]); // Required for requestAnimationFrame closure
     const isDrawingRef = useRef(false);
+
+    // ✅ Deadzones Props Refs
+    const showDeadZonesRef = useRef(showDeadZones);
+    const deadZonesRef = useRef(deadZones);
 
     // Refs for Animation Loop to avoid dependency staleness
     const scaleRef = useRef(scale);
@@ -49,6 +55,8 @@ const MapCanvas = ({
     useEffect(() => { yawOffsetRef.current = yawOffset; }, [yawOffset]);
     useEffect(() => { navTargetRef.current = navTarget; }, [navTarget]);
     useEffect(() => { drawPathRef.current = drawPath; }, [drawPath]);
+    useEffect(() => { showDeadZonesRef.current = showDeadZones; }, [showDeadZones]);
+    useEffect(() => { deadZonesRef.current = deadZones; }, [deadZones]);
 
     // Clear path when requested by parent
     useEffect(() => {
@@ -217,6 +225,44 @@ const MapCanvas = ({
 
                 const rangeVal = currentRanges[a.id] || 0;
                 const isOnline = rangeVal > 0;
+
+                // ✅ Draw Deadzones if toggled on
+                if (showDeadZonesRef.current) {
+                    let deadzoneRadiusMm = 0;
+                    let startAngle = 0;
+                    let endAngle = 0;
+
+                    if (a.id === "A1") {
+                        deadzoneRadiusMm = deadZonesRef.current["A1"] * 10;
+                        startAngle = -Math.PI / 2;
+                        endAngle = 0;
+                    } else if (a.id === "A2") {
+                        deadzoneRadiusMm = deadZonesRef.current["A2"] * 10;
+                        startAngle = 0;
+                        endAngle = Math.PI / 2;
+                    } else if (a.id === "A3") {
+                        deadzoneRadiusMm = deadZonesRef.current["A3"] * 10;
+                        startAngle = Math.PI;
+                        endAngle = 3 * Math.PI / 2;
+                    } else if (a.id === "A4") {
+                        deadzoneRadiusMm = deadZonesRef.current["A4"] * 10;
+                        startAngle = Math.PI / 2;
+                        endAngle = Math.PI;
+                    }
+
+                    if (deadzoneRadiusMm > 0) {
+                        const pxRadius = mmToPx(deadzoneRadiusMm, s);
+                        ctx.fillStyle = "rgba(239, 68, 68, 0.15)"; // Light red fill
+                        ctx.strokeStyle = "rgba(239, 68, 68, 0.6)"; // Red border
+                        ctx.lineWidth = 1.5;
+                        ctx.beginPath();
+                        ctx.moveTo(px, py);
+                        ctx.arc(px, py, pxRadius, startAngle, endAngle);
+                        ctx.closePath();
+                        ctx.fill();
+                        ctx.stroke();
+                    }
+                }
 
                 ctx.fillStyle = isOnline ? COLORS.anchorOn : COLORS.anchorOff;
                 ctx.beginPath();
@@ -608,8 +654,9 @@ const MapCanvas = ({
                             isDrawingRef.current = false;
 
                             // Send full route to execute
-                            if (drawPath.length > 1 && onRouteComplete) {
-                                onRouteComplete(drawPath);
+                            const currentDrawPath = drawPathRef.current;
+                            if (currentDrawPath.length > 1 && onRouteComplete) {
+                                onRouteComplete(currentDrawPath);
                                 // ✅ Tool remains "draw" as requested
                             } else {
                                 setDrawPath([]); // Too short, discard
@@ -621,8 +668,9 @@ const MapCanvas = ({
                         if (activeTool === "draw" && isDrawingRef.current) {
                             isDrawingRef.current = false;
 
-                            if (drawPath.length > 1 && onRouteComplete) {
-                                onRouteComplete(drawPath);
+                            const currentDrawPath = drawPathRef.current;
+                            if (currentDrawPath.length > 1 && onRouteComplete) {
+                                onRouteComplete(currentDrawPath);
                             } else {
                                 setDrawPath([]); // Too short
                             }
