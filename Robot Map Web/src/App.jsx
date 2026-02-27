@@ -215,9 +215,9 @@ const FIELD_W = 3000;
 const FIELD_H = 2000;
 
 // WebSocket Control (192.168.88.115:81)
-const CMD_WS_URL = "ws://192.168.88.115:81";
+const CMD_WS_URL = "ws://10.10.10.50:81";
 // WebSocket UWB (192.168.88.99:81)
-const UWB_WS_URL = "ws://192.168.88.99:81";
+const UWB_WS_URL = "ws://10.10.10.55:81";
 const WS_MAX_MISSED = 20;
 
 const ZOOM_MIN = 0.05,
@@ -638,6 +638,18 @@ export default function App() {
         console.log("WS-UWB: Connected");
         setConnected(true);
         missedHeartbeatsRef.current = 0;
+
+        // Send immediate heartbeat so ESP doesn't timeout
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send("PING");
+        }
+
+        // Heartbeat interval for UWB
+        uwbHeartbeatInterval = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send("PING");
+          }
+        }, 100);
       };
 
       ws.onmessage = (event) => {
@@ -715,10 +727,12 @@ export default function App() {
       };
     };
 
+    let uwbHeartbeatInterval = null;
     connectWsUwb();
 
     return () => {
       isMounted.current = false;
+      if (uwbHeartbeatInterval) clearInterval(uwbHeartbeatInterval);
       if (uwbReconnectTimeout) clearTimeout(uwbReconnectTimeout);
       if (uwbWsRef.current) {
         uwbWsRef.current.onclose = null; // Prevent re-triggering cleanup logic
@@ -748,6 +762,12 @@ export default function App() {
         }
         console.log("WS-CMD: Connected");
         setWsConnected(true);
+
+        // Immediate ping to reset timeout
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send("PING");
+          ws.send("H");
+        }
 
         // Consolidated heartbeat: Send "PING" to reset timeout & "H" for heartbeat
         // WEB_TIMEOUT_MS on ESP32 is 300ms, so we send every 100ms
@@ -1032,7 +1052,7 @@ export default function App() {
             {/* Dead Zones Config */}
             <div className="panel" style={{ padding: "14px 16px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                <div className="sectionTitle" style={{ marginBottom: 0 }}>DEAD ZONES CONFIG</div>
+                <div className="sectionTitle" style={{ marginBottom: 0 }}>Dangerous zone</div>
                 <button
                   onClick={() => setShowDeadZones(!showDeadZones)}
                   className="btn btnGhost"

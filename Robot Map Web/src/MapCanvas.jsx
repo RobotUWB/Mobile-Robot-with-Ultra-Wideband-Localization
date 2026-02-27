@@ -28,7 +28,7 @@ const MapCanvas = ({
     const [target, setTarget] = useState(null); // { x_m, y_m, px, py }
 
     // ✅ Tools System
-    const [activeTool, setActiveTool] = useState("point"); // "point" | "draw"
+    const [activeTool, setActiveTool] = useState("pan"); // "pan" | "point" | "draw"
     const [drawPath, setDrawPath] = useState([]); // [{x_m, y_m}]
     const drawPathRef = useRef([]); // Required for requestAnimationFrame closure
     const isDrawingRef = useRef(false);
@@ -36,6 +36,14 @@ const MapCanvas = ({
     // ✅ Deadzones Props Refs
     const showDeadZonesRef = useRef(showDeadZones);
     const deadZonesRef = useRef(deadZones);
+
+    // ✅ Pan & Zoom State
+    const [offsetX, setOffsetX] = useState(0);
+    const [offsetY, setOffsetY] = useState(0);
+    const offsetXRef = useRef(0);
+    const offsetYRef = useRef(0);
+    const isPanningRef = useRef(false);
+    const lastPanNodeRef = useRef({ x: 0, y: 0 });
 
     // Refs for Animation Loop to avoid dependency staleness
     const scaleRef = useRef(scale);
@@ -57,6 +65,8 @@ const MapCanvas = ({
     useEffect(() => { drawPathRef.current = drawPath; }, [drawPath]);
     useEffect(() => { showDeadZonesRef.current = showDeadZones; }, [showDeadZones]);
     useEffect(() => { deadZonesRef.current = deadZones; }, [deadZones]);
+    useEffect(() => { offsetXRef.current = offsetX; }, [offsetX]);
+    useEffect(() => { offsetYRef.current = offsetY; }, [offsetY]);
 
     // Clear path when requested by parent
     useEffect(() => {
@@ -165,7 +175,8 @@ const MapCanvas = ({
 
         const draw = () => {
             const W = cvs.width, H = cvs.height;
-            const cx = W / 2, cy = H / 2;
+            const cx = W / 2 + offsetXRef.current;
+            const cy = H / 2 + offsetYRef.current;
             const s = scaleRef.current;
             const show = showTagsRef.current;
             const currentRanges = rangesRef.current;
@@ -449,13 +460,14 @@ const MapCanvas = ({
         return () => cancelAnimationFrame(raf);
     }, []);
 
-    // Helper for Popup Positioning
     const getTargetPx = () => {
         if (!target) return null;
         const cvs = canvasRef.current;
         if (!cvs) return { px: 0, py: 0 };
         const bounds = getBoundsFromAnchors(anchors);
-        return toPx(target.x_m * 1000, target.y_m * 1000, cvs.width / 2, cvs.height / 2, scale, bounds);
+        const cx = cvs.width / 2 + offsetX;
+        const cy = cvs.height / 2 + offsetY;
+        return toPx(target.x_m * 1000, target.y_m * 1000, cx, cy, scale, bounds);
     };
     const targetPos = getTargetPx();
 
@@ -490,6 +502,24 @@ const MapCanvas = ({
                 }}>
                     <button
                         onClick={() => {
+                            setActiveTool("pan");
+                            setTarget(null);
+                        }}
+                        style={{
+                            height: 36,
+                            padding: "0 12px",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            border: "none",
+                            background: activeTool === "pan" ? "var(--accent)" : "transparent",
+                            color: activeTool === "pan" ? "#fff" : "var(--muted)",
+                            cursor: "pointer"
+                        }}
+                    >
+                        🤚 Pan
+                    </button>
+                    <button
+                        onClick={() => {
                             setActiveTool("point");
                             setDrawPath([]);
                         }}
@@ -499,6 +529,7 @@ const MapCanvas = ({
                             fontSize: 12,
                             fontWeight: 600,
                             border: "none",
+                            borderLeft: "1px solid var(--border)",
                             background: activeTool === "point" ? "var(--accent)" : "transparent",
                             color: activeTool === "point" ? "#fff" : "var(--muted)",
                             cursor: "pointer"
@@ -559,7 +590,15 @@ const MapCanvas = ({
                         objectFit: "contain",
                         display: "block",
                         touchAction: "none",
-                        cursor: "crosshair",
+                        cursor: activeTool === "pan" ? "grab" : "crosshair",
+                    }}
+                    onWheel={(e) => {
+                        // Prevent page scrolling when zooming on canvas
+                        const zoomDir = Math.sign(e.deltaY);
+                        setScale((s) => {
+                            const newS = s - zoomDir * ZOOM_STEP;
+                            return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, newS));
+                        });
                     }}
                     onPointerDown={(e) => {
                         const cvs = canvasRef.current;
@@ -575,24 +614,27 @@ const MapCanvas = ({
                             rW = rect.width; rH = rW / cvsAR;
                             oX = 0; oY = (rect.height - rH) / 2;
                         }
-                        const x = ((e.clientX - rect.left - oX) / rW) * cvs.width;
-                        const y = ((e.clientY - rect.top - oY) / rH) * cvs.height;
+                        const pointerX = ((e.clientX - rect.left - oX) / rW) * cvs.width;
+                        const pointerY = ((e.clientY - rect.top - oY) / rH) * cvs.height;
 
                         // Inverse Calculation
-                        const cx = cvs.width / 2;
-                        const cy = cvs.height / 2;
+                        const cx = cvs.width / 2 + offsetX;
+                        const cy = cvs.height / 2 + offsetY;
                         const s = scaleRef.current;
 
                         const bounds = getBoundsFromAnchors(anchorsRef.current);
                         const midX = (bounds.minX + bounds.maxX) / 2;
                         const midY = (bounds.minY + bounds.maxY) / 2;
 
-                        const mmX = (x - cx) / s + midX;
-                        const mmY = midY - (y - cy) / s;
+                        const mmX = (pointerX - cx) / s + midX;
+                        const mmY = midY - (pointerY - cy) / s;
                         const x_m = mmX / 1000;
                         const y_m = mmY / 1000;
 
-                        if (activeTool === "point") {
+                        if (activeTool === "pan") {
+                            isPanningRef.current = true;
+                            lastPanNodeRef.current = { x: pointerX, y: pointerY };
+                        } else if (activeTool === "point") {
                             // Set Target for Confirmation
                             setTarget({ x_m, y_m });
                         } else if (activeTool === "draw") {
@@ -621,10 +663,16 @@ const MapCanvas = ({
 
                         mouseRef.current = { x: pointerX, y: pointerY, active: true };
 
-                        if (activeTool === "draw" && isDrawingRef.current) {
+                        if (activeTool === "pan" && isPanningRef.current) {
+                            const dx = pointerX - lastPanNodeRef.current.x;
+                            const dy = pointerY - lastPanNodeRef.current.y;
+                            setOffsetX((prev) => prev + dx);
+                            setOffsetY((prev) => prev + dy);
+                            lastPanNodeRef.current = { x: pointerX, y: pointerY };
+                        } else if (activeTool === "draw" && isDrawingRef.current) {
                             // Inverse Calculation
-                            const cx = cvs.width / 2;
-                            const cy = cvs.height / 2;
+                            const cx = cvs.width / 2 + offsetX;
+                            const cy = cvs.height / 2 + offsetY;
                             const s = scaleRef.current;
                             const bounds = getBoundsFromAnchors(anchorsRef.current);
                             const midX = (bounds.minX + bounds.maxX) / 2;
@@ -650,7 +698,9 @@ const MapCanvas = ({
                         }
                     }}
                     onPointerUp={() => {
-                        if (activeTool === "draw" && isDrawingRef.current) {
+                        if (activeTool === "pan") {
+                            isPanningRef.current = false;
+                        } else if (activeTool === "draw" && isDrawingRef.current) {
                             isDrawingRef.current = false;
 
                             // Send full route to execute
@@ -665,7 +715,9 @@ const MapCanvas = ({
                     }}
                     onPointerLeave={() => {
                         mouseRef.current.active = false;
-                        if (activeTool === "draw" && isDrawingRef.current) {
+                        if (activeTool === "pan") {
+                            isPanningRef.current = false;
+                        } else if (activeTool === "draw" && isDrawingRef.current) {
                             isDrawingRef.current = false;
 
                             const currentDrawPath = drawPathRef.current;
