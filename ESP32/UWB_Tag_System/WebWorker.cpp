@@ -16,7 +16,7 @@ char msgBuffer[1024];
 volatile bool req_reset = false; // ตัวแปรฝากคำสั่ง Reset
 volatile bool req_save  = false; // ตัวแปรฝากคำสั่ง Save
 
-// ... (ส่วน WIFI CONFIG คงเดิม) ...
+// ... (WIFI CONFIG) ...
 static const char *AP_SSID = "UWB_TAG1_ESP32";
 static const char *AP_PASS = "12345678";
 static const IPAddress AP_IP(192, 168, 4, 1);
@@ -30,10 +30,7 @@ static const IPAddress STA_FIX_IP(192, 168, 88, 99);
 static const IPAddress STA_FIX_GW(192, 168, 88, 1);    
 static const IPAddress STA_FIX_SN(255, 255, 255, 0);   
 
-// ... (ฟังก์ชัน buildJson และ calStart คงเดิม) ...
 char* buildJson(int mode) {
-  // ... (โค้ดเดิมของคุณ) ...
-  // ตัดมาเฉพาะส่วนสำคัญเพื่อความกระชับ
   bool t2_online = (millis() - t2_last_ms < 3000); 
   float safe_x, safe_y, safe_rmse;
   int safe_n, safe_state;
@@ -48,7 +45,6 @@ char* buildJson(int mode) {
   safe_state = cal_state;
   portEXIT_CRITICAL(&myMutex);
 
-  // ... (Logic การสร้าง JSON เหมือนเดิม) ...
   if (mode == 0) {
       snprintf(msgBuffer, sizeof(msgBuffer), 
         "{\"x\":%.3f,\"y\":%.3f,\"rmse\":%.4f,\"n\":%d,\"ok\":%d,\"t2\":{\"ok\":%d,\"x\":%.2f,\"y\":%.2f},\"cs\":%d,\"a\":[\"%s\",\"%s\",\"%s\",\"%s\"],\"field\":{\"w\":%.2f,\"h\":%.2f},\"anch_xy\":[[0.0,0.0],[0.0,2.0],[3.0,0.0],[3.0,2.0]]}",
@@ -73,7 +69,6 @@ static void calStart(bool multi, float x, float y) {
   Serial.printf("[WS] Cal Start: x=%.2f y=%.2f multi=%d\n", x, y, multi);
 }
 
-// ... (HTTP Handlers คงเดิม) ...
 static void handleCalCommon(bool multi) {
   if (!server.hasArg("x")) return;
   float valX = server.arg("x").toFloat();
@@ -92,7 +87,6 @@ IPAddress activeIP() {
   return WiFi.softAPIP();
 }
 
-// =================== แก้ไขตรงนี้: ลดภาระใน Callback ===================
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
   switch(type) {
     case WStype_DISCONNECTED: break;
@@ -116,11 +110,11 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
            if (sscanf(text.c_str(), "CALP %f %f", &valX, &valY) == 2) calStart(true, valX, valY);
         }
         else if (text == "SAVE") {
-           req_save = true; // [แก้ไข] แค่ยกธงบอกว่า "อยากเซฟนะ" แล้วจบ
+           req_save = true; 
            Serial.println("[WS] Save Requested");
         }
         else if (text == "RESET") {
-           req_reset = true; // [แก้ไข] แค่ยกธงบอกว่า "อยากรีเซตนะ"
+           req_reset = true; 
            Serial.println("[WS] Reset Requested");
         }
       }
@@ -149,9 +143,10 @@ void setupWeb() {
   Serial.println("[WS] Server Started");
 }
 
-// =================== แก้ไขตรงนี้: ทำงานหนักใน Loop แทน ===================
+// =================== ส่วนที่มีการแก้ไข ===================
+
 void performResetSafe() {
-   portENTER_CRITICAL(&myMutex); // ล็อคเพื่อความปลอดภัยสูงสุด
+   portENTER_CRITICAL(&myMutex); 
    for (int i = 0; i < 4; i++) { 
        bias[i] = 0; 
        mp_bias_sum[i] = 0; 
@@ -159,24 +154,40 @@ void performResetSafe() {
        fA[i] = -1; 
        lastAccepted[i] = -1; 
    }
-   cal_state = 4;
+   cal_state = 0; // เปลี่ยนเป็นสถานะ Idle แทนการแจ้งว่า Reset
    portEXIT_CRITICAL(&myMutex);
    
-   saveBias(); // เขียน Flash ตอนนี้ปลอดภัยกว่า
-   Serial.println("[MAIN] Reset & Save Done.");
+   saveBias(); 
+   Serial.println("[MAIN] Factory Reset Done.");
 }
 
 void performSaveSafe() {
-   for (int i = 0; i < 4; i++) if (mp_bias_cnt[i] > 0) bias[i] = mp_bias_sum[i] / mp_bias_cnt[i];
-   saveBias();
-   Serial.println("[MAIN] Bias Saved.");
+   bool hasNewData = false;
+   portENTER_CRITICAL(&myMutex);
+   for (int i = 0; i < 4; i++) {
+      if (mp_bias_cnt[i] > 0) {
+         bias[i] = mp_bias_sum[i] / (float)mp_bias_cnt[i]; // อัปเดต Bias ใหม่
+         mp_bias_sum[i] = 0; // ล้างค่าสะสมเพื่อไม่ให้ปนกับรอบถัดไป
+         mp_bias_cnt[i] = 0;
+         hasNewData = true;
+      }
+   }
+   portEXIT_CRITICAL(&myMutex);
+
+   if (hasNewData) {
+      saveBias();
+      Serial.println("[MAIN] Bias Saved & System Continuing...");
+   } else {
+      Serial.println("[MAIN] Save skipped: No new calibration data.");
+   }
 }
+
+// =======================================================
 
 void loopWeb() { 
   server.handleClient(); 
   webSocket.loop(); 
 
-  // [ส่วนที่เพิ่ม] ตรวจสอบธงคำสั่งแล้วทำงาน
   if (req_reset) {
     req_reset = false;
     performResetSafe();

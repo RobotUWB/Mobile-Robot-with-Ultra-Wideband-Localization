@@ -4,7 +4,7 @@
 
 // ================== Anchor A3 (stable logging) ==================
 char anchor_addr[] = "86:00:00:00:00:00:00:03";   // ✅ A3 EUI (สำคัญ: ต้องขึ้นต้น 86)
-uint16_t Adelay = 16464;
+uint16_t Adelay = 16570;
 
 // ---------- SPI pins ----------
 #define SPI_SCK  18

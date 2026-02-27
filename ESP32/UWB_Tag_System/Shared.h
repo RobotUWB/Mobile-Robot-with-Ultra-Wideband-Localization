@@ -24,7 +24,7 @@ static constexpr float TAG_Z = 0.315f;
 static constexpr float AZ[4] = { 0.70f, 0.70f, 0.70f, 0.70f }; 
 
 // [แนะนำ] หากขับใกล้เสาแล้วหลุด ให้ลองเปลี่ยนเป็น false เพื่อทดสอบ
-static constexpr bool USE_2D_HEIGHT_CORR = true;
+static constexpr bool USE_2D_HEIGHT_CORR = false;
 
 static constexpr float AX[4] = { 0.00f, 0.00f, 3.00f, 3.00f };
 static constexpr float AY[4] = { 0.00f, 2.00f, 0.00f, 2.00f };
@@ -53,7 +53,7 @@ static constexpr float MAX_STEP_M = 0.50f;
 
 // =================== TIMING ===================
 // [ปรับเพิ่ม] จาก 2500 เป็น 5000 เพื่อความเสถียรสูงสุด
-static constexpr uint32_t ANCHOR_TIMEOUT_MS = 1000;
+static constexpr uint32_t ANCHOR_TIMEOUT_MS = 1000;  
 static constexpr uint32_t CAL_MS = 5000;
 
 // =================== STRUCTS & GLOBALS ===================

@@ -205,11 +205,11 @@ void newRange() {
   }
 
   // DEBUG
-  static uint32_t dbgMs = 0;
-  if (millis() - dbgMs > 100) {
-    dbgMs = millis();
-    Serial.printf("[DBG] id=%d raw=%.3f bias=%.3f corr=%.3f\n", id, d, bias[id], d_corr);
-  }
+  //static uint32_t dbgMs = 0;
+  //if (millis() - dbgMs > 100) {
+    //dbgMs = millis();
+    //Serial.printf("[DBG] id=%d raw=%.3f bias=%.3f corr=%.3f\n", id, d, bias[id], d_corr);
+  //}
 
   buf[id][buf_i[id]] = d_corr;
   buf_i[id] = (buf_i[id] + 1) % MED_N;
