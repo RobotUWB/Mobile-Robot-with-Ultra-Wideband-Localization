@@ -24,19 +24,19 @@ static constexpr float TAG_Z = 0.315f;
 static constexpr float AZ[4] = { 0.70f, 0.70f, 0.70f, 0.70f }; 
 
 // [แนะนำ] หากขับใกล้เสาแล้วหลุด ให้ลองเปลี่ยนเป็น false เพื่อทดสอบ
-static constexpr bool USE_2D_HEIGHT_CORR = true;
+static constexpr bool USE_2D_HEIGHT_CORR = false;
 
 static constexpr float AX[4] = { 0.00f, 0.00f, 3.00f, 3.00f };
 static constexpr float AY[4] = { 0.00f, 2.00f, 0.00f, 2.00f };
 
 // =================== RANGE VALIDATION ===================
-static constexpr float MIN_RANGE_M = 0.10f;
+static constexpr float MIN_RANGE_M = 0.20f;
 static constexpr float MAX_RANGE_M = 15.00f;
 
 // =================== FILTERING ===================
 static constexpr int MED_N = 3; 
 // [ปรับเพิ่ม] จาก 3.00 เป็น 5.00 เพื่อไม่ให้สะบัดหลุดตอนวิ่งเร็ว
-static constexpr float MAX_JUMP_M = 5.00f; 
+static constexpr float MAX_JUMP_M = 1.50f; 
 
 // [คงเดิม] ค่า 0.30 นิ่งดีอยู่แล้วตามที่คุณบอก
 static constexpr float RANGE_EMA_ALPHA = 0.30f;
@@ -53,7 +53,7 @@ static constexpr float MAX_STEP_M = 0.50f;
 
 // =================== TIMING ===================
 // [ปรับเพิ่ม] จาก 2500 เป็น 5000 เพื่อความเสถียรสูงสุด
-static constexpr uint32_t ANCHOR_TIMEOUT_MS = 5000;
+static constexpr uint32_t ANCHOR_TIMEOUT_MS = 1000;  
 static constexpr uint32_t CAL_MS = 5000;
 
 // =================== STRUCTS & GLOBALS ===================

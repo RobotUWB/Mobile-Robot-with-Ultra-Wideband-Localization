@@ -3,7 +3,7 @@
 #include "DW1000.h"
 
 char anchor_addr[] = "87:00:00:00:00:00:00:04";
-uint16_t Adelay = 16464;
+uint16_t Adelay = 16550;
 
 #define SPI_SCK  18
 #define SPI_MISO 19
@@ -86,15 +86,22 @@ void newRange() {
   Serial.println(" m");
 }
 
-void newDevice(DW1000Device *device) {
-  Serial.print("[ANCHOR A4] Connected TAG: 0x");
-  Serial.println(device->getShortAddress(), HEX);
+static void resetFilterState() {
   have_last = false;
   last_ok = NAN;
   ema_range = NAN;
 }
 
+void newDevice(DW1000Device *device) {
+  Serial.print("[ANCHOR A4] Connected TAG: 0x");
+  Serial.println(device->getShortAddress(), HEX);
+
+  resetFilterState();
+}
+
 void inactiveDevice(DW1000Device *device) {
   Serial.print("[ANCHOR A4] TAG inactive: 0x");
   Serial.println(device->getShortAddress(), HEX);
+  
+  resetFilterState();
 }

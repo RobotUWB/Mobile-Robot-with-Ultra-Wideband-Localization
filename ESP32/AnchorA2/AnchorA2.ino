@@ -4,7 +4,7 @@
 
 // ================== Anchor A2 (stable logging) ==================
 char anchor_addr[] = "85:00:00:00:00:00:00:02";   // ✅ A2 EUI (สำคัญ: ต้องขึ้นต้น 85)
-uint16_t Adelay = 16464;
+uint16_t Adelay = 16570;
 
 // ---------- SPI pins ----------
 #define SPI_SCK  18
@@ -94,17 +94,23 @@ void newRange() {
   Serial.println(" m");
 }
 
-void newDevice(DW1000Device *device) {
-  Serial.print("[ANCHOR A2] Connected TAG: 0x");
-  Serial.println(device->getShortAddress(), HEX);
-
-  // reset filter เมื่อมี device ใหม่
+static void resetFilterState() {
   have_last = false;
   last_ok = NAN;
   ema_range = NAN;
 }
 
+
+void newDevice(DW1000Device *device) {
+  Serial.print("[ANCHOR A2] Connected TAG: 0x");
+  Serial.println(device->getShortAddress(), HEX);
+
+  resetFilterState();
+}
+
 void inactiveDevice(DW1000Device *device) {
   Serial.print("[ANCHOR A2] TAG inactive: 0x");
   Serial.println(device->getShortAddress(), HEX);
+
+  resetFilterState();
 }
