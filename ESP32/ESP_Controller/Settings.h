@@ -4,15 +4,16 @@
 #include <IPAddress.h>
 
 // --- WiFi Settings ---
-#define WIFI_SSID "GMR"
-#define WIFI_PASS "12123121211212312121"
+#define WIFI_SSID "UWB_sorting"
+#define WIFI_PASS "zzzzzzzz"
 
-const IPAddress local_IP(192, 168, 88, 115);
-const IPAddress gateway(192, 168, 88, 1);
+const IPAddress local_IP(10, 10, 10, 50);
+const IPAddress gateway(10, 10, 10, 1);
 const IPAddress subnet(255, 255, 255, 0);
 const IPAddress primaryDNS(8, 8, 8, 8);
 
 // --- Pin Definitions ---
+#define WIFI_LED_PIN 2
 #define RX_Control 16
 #define TX_Control 17
 

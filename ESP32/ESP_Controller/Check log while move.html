@@ -252,11 +252,14 @@
     </div>
 
     <script>
-      const WS_URL = "ws://192.168.88.115:81";
+      const WS_URL = "ws://10.10.10.50:81";
       let ws = null;
       let heartbeatTimer = null;
 
-      // ฟังก์ชันจัดการ Log ให้ดูง่ายและมี Timestamp
+	// กำหนดโควตาบรรทัดสูงสุด ปรับเลขได้ตามต้องการครับ
+      const MAX_LOGS = 200; 
+
+      // ฟังก์ชันจัดการ Log ให้ดูง่าย มี Timestamp และไม่กินสเปคคอม
       function addLog(msg, type = "sys") {
         const logDiv = document.getElementById("log");
         const now = new Date();
@@ -266,7 +269,14 @@
         if (type === "send") colorClass = "txt-send";
         else if (type === "recv") colorClass = "txt-recv";
 
-        logDiv.innerHTML += `<div class="log-msg"><span class="log-time">[${timeStr}]</span> <span class="${colorClass}">${msg}</span></div>`;
+        // ใช้ insertAdjacentHTML แทรกเฉพาะบรรทัดใหม่ ไม่กวนบรรทัดเก่า
+        const logEntry = `<div class="log-msg"><span class="log-time">[${timeStr}]</span> <span class="${colorClass}">${msg}</span></div>`;
+        logDiv.insertAdjacentHTML('beforeend', logEntry);
+
+        // เช็คว่าถ้าจำนวนบรรทัดเกิน MAX_LOGS ให้เตะบรรทัดบนสุดทิ้ง
+        while (logDiv.children.length > MAX_LOGS) {
+          logDiv.removeChild(logDiv.firstChild);
+        }
 
         // Auto-scroll ลงล่างสุด
         logDiv.scrollTop = logDiv.scrollHeight;

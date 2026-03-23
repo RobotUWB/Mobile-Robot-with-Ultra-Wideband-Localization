@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Draw Route ESP32 Tester</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        background: #1e1e1e;
+        color: white;
+        margin: 0;
+        padding: 20px;
+      }
+      #canvas {
+        border: 2px solid #555;
+        background: #2d2d2d;
+        cursor: crosshair;
+        margin: 10px 0;
+        border-radius: 8px;
+      }
+      .controls {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 20px;
+      }
+      button {
+        padding: 10px 20px;
+        font-size: 16px;
+        cursor: pointer;
+        border: none;
+        border-radius: 5px;
+        font-weight: bold;
+      }
+      .btn-connect {
+        background: #4caf50;
+        color: white;
+      }
+      .btn-send {
+        background: #2196f3;
+        color: white;
+      }
+      .btn-clear {
+        background: #f44336;
+        color: white;
+      }
+      .btn-stop {
+        background: #ff9800;
+        color: white;
+      }
+      #log {
+        width: 600px;
+        height: 150px;
+        overflow-y: scroll;
+        background: #000;
+        color: #0f0;
+        padding: 10px;
+        font-family: monospace;
+        border-radius: 5px;
+        border: 1px solid #555;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>Draw Route & Send to ESP32</h2>
+    <div class="controls">
+      <button class="btn-connect" onclick="connect()">Connect WS</button>
+      <button class="btn-send" onclick="sendRoute()">Send Route</button>
+      <button class="btn-clear" onclick="clearCanvas()">Clear Route</button>
+      <button class="btn-stop" onclick="sendCommand('STOP')">STOP Robot</button>
+    </div>
+
+    <p>Status: <b id="status" style="color: red">Disconnected</b></p>
+
+    <!-- Canvas สำหรับวาดเส้นจำลองพื้นที่ (กว้าง 6m ยาว 4m ย่อสเกล 100 เท่า) -->
+    <canvas id="canvas" width="600" height="400"></canvas>
+    <p style="font-size: 12px; color: #aaa">
+      Click on the canvas to add waypoints (assuming 600px = 6 meters)
+    </p>
+
+    <div id="log"></div>
+
+    <script>
+      let ws;
+      let pingInterval;
+      let waypoints = []; // เลย์เอาต์อาเรย์เก็บจุดพิกัดจริง (หน่วยเมตร)
+
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d");
+      const scale = 100; // 100px = 1 meter
+
+      // ฟังก์ชันเชื่อมต่อ WebSocket แบบเก่า
+      function connect() {
+        ws = new WebSocket("ws://10.10.10.50:81");
+
+        ws.onopen = function () {
+          document.getElementById("status").innerHTML = "Connected";
+          document.getElementById("status").style.color = "#4CAF50";
+          pingInterval = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) ws.send("PING");
+          }, 100);
+          logMsg("WS Connected!");
+        };
+
+        ws.onmessage = function (evt) {
+          if (evt.data !== "PONG") {
+            logMsg("RX: " + evt.data, "yellow");
+          }
+        };
+
+        ws.onclose = function () {
+          document.getElementById("status").innerHTML = "Disconnected";
+          document.getElementById("status").style.color = "red";
+          clearInterval(pingInterval);
+          logMsg("WS Disconnected. Please reconnect.", "red");
+        };
+      }
+
+      // จับเหตุการณ์การคลิกเมาส์บนจอ Canvas
+      canvas.addEventListener("mousedown", function (e) {
+        const rect = canvas.getBoundingClientRect();
+        const clickX_px = e.clientX - rect.left;
+        const clickY_px = e.clientY - rect.top;
+
+        // แปลงจากพิกเซลหน้าจอเป็นพิกัดจริงหน่วยเมตร
+        const realX = +(clickX_px / scale).toFixed(2);
+        const realY = +(clickY_px / scale).toFixed(2);
+
+        // ยัดพิกัดจริงลงในคิว
+        waypoints.push({ x: realX, y: realY });
+
+        drawAllPoints();
+      });
+
+      // วาดจุดและเส้นบน Canvas
+      function drawAllPoints() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // วาดเส้นประโยงจุด
+        if (waypoints.length > 1) {
+          ctx.beginPath();
+          ctx.moveTo(waypoints[0].x * scale, waypoints[0].y * scale);
+          for (let i = 1; i < waypoints.length; i++) {
+            ctx.lineTo(waypoints[i].x * scale, waypoints[i].y * scale);
+          }
+          ctx.strokeStyle = "#2196F3";
+          ctx.lineWidth = 2;
+          ctx.setLineDash([5, 5]); // เส้นประ
+          ctx.stroke();
+        }
+
+        // วาดลูกกลมๆ ทับลงไป
+        for (let i = 0; i < waypoints.length; i++) {
+          const pxX = waypoints[i].x * scale;
+          const pxY = waypoints[i].y * scale;
+
+          ctx.beginPath();
+          ctx.arc(pxX, pxY, 6, 0, Math.PI * 2);
+          ctx.fillStyle = i === waypoints.length - 1 ? "#ff9800" : "#4CAF50"; // จุดสุดท้ายสีส้ม
+          ctx.fill();
+
+          // เขียนพิกัดทับจุด
+          ctx.fillStyle = "white";
+          ctx.font = "10px Arial";
+          ctx.fillText(
+            `(${waypoints[i].x}, ${waypoints[i].y})`,
+            pxX + 8,
+            pxY - 8,
+          );
+        }
+      }
+
+      // รวมพิกัดร่างส่ง ESP32
+      function sendRoute() {
+        if (waypoints.length === 0) {
+          alert("Please draw some points on the canvas first!");
+          return;
+        }
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          alert("Please connect WebSocket first!");
+          return;
+        }
+
+        // นำ Array ของ Object มาต่อ String ด้วย : (เช่น GOTO:1.0:1.0:2.0:2.0)
+        let cmdString = "GOTO:";
+        let coordsList = waypoints.map((wp) => `${wp.x}:${wp.y}`);
+        cmdString += coordsList.join(":");
+
+        sendCommand(cmdString);
+      }
+
+      function clearCanvas() {
+        waypoints = [];
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        logMsg("Canvas cleared.");
+      }
+
+      function sendCommand(cmd) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(cmd);
+          logMsg("TX: " + cmd, "cyan");
+        }
+      }
+
+      function logMsg(msg, color = "#0f0") {
+        const logDiv = document.getElementById("log");
+        const entry = document.createElement("div");
+        entry.style.color = color;
+        entry.textContent = msg;
+        logDiv.appendChild(entry);
+
+        // ลบข้อความเก่าทิ้งถ้าเกิน 50 บรรทัด (กันคอมค้าง)
+        while (logDiv.children.length > 50) {
+          logDiv.removeChild(logDiv.firstChild);
+        }
+
+        logDiv.scrollTop = logDiv.scrollHeight; // Auto scroll สุดขอบล่าง
+      }
+    </script>
+  </body>
+</html>

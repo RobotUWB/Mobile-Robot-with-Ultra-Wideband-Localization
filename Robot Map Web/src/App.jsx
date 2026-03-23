@@ -388,7 +388,7 @@ export default function App() {
 
   // ✅ UI State for button highlights (Restored to fix white screen)
   const [driveKey, setDriveKey] = useState(null); // 'W', 'A', 'S', 'D' or null
-  const [rotKey, setRotKey] = useState(null);     // 'Q', 'E' or null
+  const [rotKey, setRotKey] = useState(null); // 'Q', 'E' or null
 
   const [stopHeld, setStopHeld] = useState(false);
   const stopHeldRef = useRef(false);
@@ -568,7 +568,6 @@ export default function App() {
         handleKeyPress(k);
       }
     };
-
 
     const onKeyUp = (e) => {
       if (isTypingTarget(e.target)) return;
@@ -1000,22 +999,32 @@ export default function App() {
             {navTarget && (
               <div className="panel" style={{ padding: "14px 16px" }}>
                 <div className="sectionTitle">NAVIGATION TARGET</div>
-                <div style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 10,
-                }}>
-                  <div style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: 14,
-                    color: "var(--text)",
-                  }}>
-                    🔴 X: {navTarget.x_m.toFixed(2)}  Y: {navTarget.y_m.toFixed(2)}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 10,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: 14,
+                      color: "var(--text)",
+                    }}
+                  >
+                    🔴 X: {navTarget.x_m.toFixed(2)} Y:{" "}
+                    {navTarget.y_m.toFixed(2)}
                   </div>
                   <button
                     className="btn btnGhost"
-                    style={{ height: 28, padding: "0 10px", borderRadius: 8, fontSize: 11 }}
+                    style={{
+                      height: 28,
+                      padding: "0 10px",
+                      borderRadius: 8,
+                      fontSize: 11,
+                    }}
                     onClick={() => setNavTarget(null)}
                   >
                     CLEAR
@@ -1102,7 +1111,6 @@ export default function App() {
       </div>
     </>
   );
-
 }
 
 /* ================== SUB COMPONENTS ================== */
