@@ -298,6 +298,16 @@ export default function App() {
   const [toast, setToast] = useState({ show: false, msg: "", type: "info" });
   const [navTarget, setNavTarget] = useState(null); // { x_m, y_m } — confirmed nav destination
   const [clearPathTrigger, setClearPathTrigger] = useState(0); // Tell MapCanvas to clear drawn path
+  const lastCommandRef = useRef(null); // ✅ Store last command for Resume
+  const [showAdvancedPanels, setShowAdvancedPanels] = useState(false); // ✅ Toggle Advanced Tools
+  const showAdvancedPanelsRef = useRef(false);
+
+  // ✅ New States for CSV Logging
+  const [plannedRoute, setPlannedRoute] = useState([]);
+  const [actualTrajectory, setActualTrajectory] = useState([]);
+  const [isRecording, setIsRecording] = useState(false);
+  const isRecordingRef = useRef(false);
+  useEffect(() => { isRecordingRef.current = isRecording; }, [isRecording]);
 
   // Deadzones Configuration
   const [showDeadZones, setShowDeadZones] = useState(false);
@@ -324,6 +334,34 @@ export default function App() {
   const showToast = (msg, type = "info") => {
     setToast({ show: true, msg, type });
     setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 2600);
+  };
+
+  // ✅ CSV EXPORT HELPERS
+  const exportCSV = (filename, dataRows, headers) => {
+    if (dataRows.length === 0) {
+      showToast("No data to export", "warning");
+      return;
+    }
+    const csvContent = [headers.join(","), ...dataRows.map(row => row.join(","))].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast(`Exported ${filename}`, "success");
+  };
+
+  const exportPlannedRoute = () => {
+    const rows = plannedRoute.map((p, i) => [i + 1, p.x_m.toFixed(3), p.y_m.toFixed(3)]);
+    exportCSV("planned_route.csv", rows, ["Point_ID", "X_m", "Y_m"]);
+  };
+
+  const exportActualTrajectory = () => {
+    const rows = actualTrajectory.map((p, i) => [i + 1, p.time_ms, p.x_m.toFixed(3), p.y_m.toFixed(3), p.rmse?.toFixed(4) || "0.0000"]);
+    exportCSV("actual_trajectory.csv", rows, ["Point_ID", "Timestamp_ms", "X_m", "Y_m", "RMSE"]);
   };
 
   /* --- API Actions (Control Fallback) --- */
@@ -414,6 +452,16 @@ export default function App() {
     isPausedRef2.current = isPaused;
   }, [isPaused]);
 
+  useEffect(() => {
+    showAdvancedPanelsRef.current = showAdvancedPanels;
+    if (!showAdvancedPanels && pressedKeysRef.current.length > 0) {
+      pressedKeysRef.current = [];
+      setDriveKey(null);
+      setRotKey(null);
+      if (!stopHeldRef.current) sendDriveCmd("STOP");
+    }
+  }, [showAdvancedPanels]);
+
   const isTypingTarget = (el) => {
     if (!el) return false;
     const tag = (el.tagName || "").toUpperCase();
@@ -422,6 +470,10 @@ export default function App() {
 
   // Function to send drive command (WebSocket Preferred, fallback to HTTP)
   const sendDriveCmd = async (cmdVal) => {
+    if (cmdVal !== "STOP" && cmdVal !== "H") {
+      lastCommandRef.current = cmdVal; // ✅ Save for Resume
+    }
+
     // 1. WebSocket (Text Mode)
     if (wsCmdRef.current && wsCmdRef.current.readyState === WebSocket.OPEN) {
       wsCmdRef.current.send(cmdVal);
@@ -554,6 +606,7 @@ export default function App() {
     };
 
     const onKeyDown = (e) => {
+      if (!showAdvancedPanelsRef.current) return;
       if (isTypingTarget(e.target)) return;
 
       if (e.code === "Space") {
@@ -581,6 +634,7 @@ export default function App() {
 
 
     const onKeyUp = (e) => {
+      if (!showAdvancedPanelsRef.current) return;
       if (isTypingTarget(e.target)) return;
 
       if (e.code === "Space") {
@@ -674,11 +728,24 @@ export default function App() {
             const minY = Math.min(...ys);
             const maxY = Math.max(...ys);
 
+            const newX = clamp(xVal * 1000, minX, maxX);
+            const newY = clamp(yVal * 1000, minY, maxY);
+
             setPose((prev) => ({
-              x_mm: clamp(xVal * 1000, minX, maxX),
-              y_mm: clamp(yVal * 1000, minY, maxY),
+              x_mm: newX,
+              y_mm: newY,
               yaw: prev.yaw,
             }));
+
+            // ✅ Record Trajectory if recording is ON
+            if (isRecordingRef.current) {
+                setActualTrajectory(prev => [...prev, {
+                    time_ms: Date.now(),
+                    x_m: newX / 1000,
+                    y_m: newY / 1000,
+                    rmse: Number.isFinite(Number(j.rmse)) ? Number(j.rmse) : 0
+                }]);
+            }
           }
 
           // Anchor distances
@@ -840,6 +907,7 @@ export default function App() {
     const cmdVal = `GOTO:${x.toFixed(2)}:${y.toFixed(2)}`;
     // Send via WebSocket (Control ESP)
     if (wsCmdRef.current && wsCmdRef.current.readyState === WebSocket.OPEN) {
+      lastCommandRef.current = cmdVal; // ✅ Save for Resume
       wsCmdRef.current.send(cmdVal);
       setNavTarget({ x_m: x, y_m: y }); // ✅ Show marker on map
       showToast(`Going to X:${x.toFixed(2)} Y:${y.toFixed(2)}`, "info");
@@ -849,6 +917,10 @@ export default function App() {
   };
 
   const handleRouteComplete = (pathPoints) => {
+    if (pathPoints.length > 0) {
+      setPlannedRoute(pathPoints); // ✅ Save planned route naturally when drawing finishes
+    }
+
     if (wsCmdRef.current && wsCmdRef.current.readyState === WebSocket.OPEN) {
       if (pathPoints.length === 0) return;
 
@@ -863,6 +935,7 @@ export default function App() {
       const finalDest = limited[limited.length - 1];
       setNavTarget({ x_m: finalDest.x_m, y_m: finalDest.y_m });
 
+      lastCommandRef.current = cmdStr; // ✅ Save for Resume
       wsCmdRef.current.send(cmdStr);
       showToast(`Started Route (${limited.length} points)`, "info");
     } else {
@@ -922,22 +995,25 @@ export default function App() {
           }}
         >
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-            <div
+            <button
+              onClick={() => setShowAdvancedPanels(!showAdvancedPanels)}
               style={{
                 width: 40,
                 height: 40,
-                background: "rgba(255,255,255,0.04)",
-                border: "1px solid rgba(255,255,255,0.10)",
+                background: showAdvancedPanels ? "rgba(59,130,246,0.15)" : "rgba(255,255,255,0.04)",
+                border: showAdvancedPanels ? "1px solid rgba(59,130,246,0.40)" : "1px solid rgba(255,255,255,0.10)",
                 borderRadius: 10,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                color: "var(--muted)",
+                color: showAdvancedPanels ? "var(--accent)" : "var(--muted)",
+                cursor: "pointer",
+                transition: "all 0.2s ease"
               }}
-              title="ESP32: Dual Setup (Pos=.53, Cmd=.115)"
+              title="Toggle Advanced Features (Joystick & Data Logs)"
             >
               <Icons.Wifi />
-            </div>
+            </button>
 
             <div>
               <h1
@@ -1036,18 +1112,20 @@ export default function App() {
             />
 
             {/* Manual Drive (TEST) */}
-            <Joystick
-              rotKey={rotKey}
-              driveKey={driveKey}
-              stopHeld={stopHeld}
-              connected={connected}
-              rotatePress={rotatePress}
-              rotateRelease={rotateRelease}
-              manualPress={manualPress}
-              manualRelease={manualRelease}
-              stopHoldPress={stopHoldPress}
-              stopHoldRelease={stopHoldRelease}
-            />
+            {showAdvancedPanels && (
+              <Joystick
+                rotKey={rotKey}
+                driveKey={driveKey}
+                stopHeld={stopHeld}
+                connected={connected}
+                rotatePress={rotatePress}
+                rotateRelease={rotateRelease}
+                manualPress={manualPress}
+                manualRelease={manualRelease}
+                stopHoldPress={stopHoldPress}
+                stopHoldRelease={stopHoldRelease}
+              />
+            )}
 
             {/* Dead Zones Config */}
             <div className="panel" style={{ padding: "14px 16px" }}>
@@ -1122,6 +1200,7 @@ export default function App() {
                     onClick={() => {
                       setNavTarget(null);
                       setClearPathTrigger(prev => prev + 1); // Tell MapCanvas to clear path
+                      lastCommandRef.current = null; // ✅ Clear last cmd
                       sendDriveCmd("STOP"); // Stop robot if clearing active route
                       showToast("Route Cleared", "info");
                     }}
@@ -1131,13 +1210,62 @@ export default function App() {
                 </div>
               </div>
             )}
+
+            {/* ✅ Data Logging / CSV Export */}
+            {showAdvancedPanels && (
+              <div className="panel" style={{ padding: "14px 16px" }}>
+                <div className="sectionTitle" style={{ marginBottom: 12 }}>DATA LOGGING (CSV)</div>
+                <div style={{ display: "grid", gap: 10 }}>
+                  {/* Planned Route */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                     <span style={{ fontSize: 13, color: "var(--text)" }}>Planned: {plannedRoute.length} pts</span>
+                     <button className="btn btnGhost" style={{ height: 28, fontSize: 11, borderRadius: 6 }} onClick={exportPlannedRoute} disabled={plannedRoute.length === 0}>
+                        ⬇️ CSV
+                     </button>
+                  </div>
+
+                  {/* Actual Trajectory */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+                     <span style={{ fontSize: 13, color: "var(--text)" }}>Actual: {actualTrajectory.length} pts</span>
+                     <div style={{ display: "flex", gap: 6 }}>
+                       <button 
+                          className="btn btnGhost" 
+                          style={{ height: 28, fontSize: 11, borderRadius: 6, color: isRecording ? "var(--danger)" : "var(--success)" }} 
+                          onClick={() => setIsRecording(!isRecording)}>
+                          {isRecording ? "⏹ STOP" : "⏺ REC"}
+                       </button>
+                       <button className="btn btnGhost" style={{ height: 28, fontSize: 11, borderRadius: 6 }} onClick={exportActualTrajectory} disabled={actualTrajectory.length === 0}>
+                          ⬇️ CSV
+                       </button>
+                     </div>
+                  </div>
+
+                  {/* Clear Data */}
+                  {(actualTrajectory.length > 0 || plannedRoute.length > 0) && (
+                     <button className="btn btnGhost" style={{ height: 28, fontSize: 11, borderRadius: 6, marginTop: 4, width: "100%", color: "var(--danger)" }} onClick={() => { setActualTrajectory([]); setPlannedRoute([]); }}>
+                        🗑️ CLEAR DATA
+                     </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Controls (ล่างสุด) */}
             <div style={{ marginTop: "auto", display: "grid", gap: 10 }}>
               <button
                 onClick={async () => {
                   if (isPaused) {
                     setIsPaused(false);
-                    showToast("RESUME (unlocked)", "success");
+                    if (lastCommandRef.current) {
+                      if (wsCmdRef.current && wsCmdRef.current.readyState === WebSocket.OPEN) {
+                        wsCmdRef.current.send(lastCommandRef.current);
+                      } else {
+                        sendDriveCmd(lastCommandRef.current);
+                      }
+                      showToast(`RESUME: ${lastCommandRef.current.substring(0, 15)}...`, "success");
+                    } else {
+                      showToast("RESUME (No prior commands)", "success");
+                    }
                   } else {
                     sendDriveCmd("STOP");
                     setIsPaused(true);

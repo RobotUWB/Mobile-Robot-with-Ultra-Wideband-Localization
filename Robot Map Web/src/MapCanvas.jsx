@@ -33,6 +33,11 @@ const MapCanvas = ({
     const drawPathRef = useRef([]); // Required for requestAnimationFrame closure
     const isDrawingRef = useRef(false);
 
+    // ✅ Test Points Toggle
+    const [showTestPoints, setShowTestPoints] = useState(true);
+    const showTestPointsRef = useRef(true);
+    useEffect(() => { showTestPointsRef.current = showTestPoints; }, [showTestPoints]);
+
     // ✅ Deadzones Props Refs
     const showDeadZonesRef = useRef(showDeadZones);
     const deadZonesRef = useRef(deadZones);
@@ -300,6 +305,57 @@ const MapCanvas = ({
                 }
             }
 
+            // ✅ 4 Test Points (ตามที่ผู้ใช้ระบุพิกัดเป็น cm)
+            if (showTestPointsRef.current) {
+                const testPoints = [
+                    // จุดทดสอบ 4 จุดแรกที่กำหนดเอง
+                    { id: 1, x_cm: 65, y_cm: 48 },
+                    { id: 2, x_cm: 62, y_cm: 150 },
+                    { id: 3, x_cm: 235, y_cm: 157 },
+                    { id: 4, x_cm: 233, y_cm: 44 },
+                    
+                    // จุดกึ่งกลางระหว่างขอบ (กว้าง 2m, ยาว 3m) อีก 4 จุด
+                    { id: 5, x_cm: 150, y_cm: 0 },   // กลางด้านยาว (บน)
+                    { id: 6, x_cm: 150, y_cm: 200 }, // กลางด้านยาว (ล่าง)
+                    { id: 7, x_cm: 0, y_cm: 100 },   // กลางด้านกว้าง (ซ้าย)
+                    { id: 8, x_cm: 300, y_cm: 100 }  // กลางด้านกว้าง (ขวา)
+                ];
+
+                ctx.save();
+                for (const tp of testPoints) {
+                    const x_mm = tp.x_cm * 10;
+                    const y_mm = tp.y_cm * 10;
+                    const pxPy = toPx(x_mm, y_mm, cx, cy, s, bounds);
+
+                    // Crosshair
+                    ctx.strokeStyle = "rgba(250, 204, 21, 0.7)"; // Yellow
+                    ctx.lineWidth = 1;
+                    ctx.setLineDash([4, 4]);
+                    ctx.beginPath();
+                    ctx.moveTo(pxPy.px - 20, pxPy.py);
+                    ctx.lineTo(pxPy.px + 20, pxPy.py);
+                    ctx.moveTo(pxPy.px, pxPy.py - 20);
+                    ctx.lineTo(pxPy.px, pxPy.py + 20);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+
+                    // Dot
+                    ctx.fillStyle = "rgba(250, 204, 21, 1)";
+                    ctx.beginPath();
+                    ctx.arc(pxPy.px, pxPy.py, 4, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Label
+                    ctx.fillStyle = "rgba(250, 204, 21, 1)";
+                    ctx.font = "600 11px Inter";
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "middle";
+                    ctx.fillText(`จุดที่ ${tp.id}`, pxPy.px, pxPy.py - 16);
+                    ctx.fillText(`(${tp.x_cm}, ${tp.y_cm} cm)`, pxPy.px, pxPy.py + 16);
+                }
+                ctx.restore();
+            }
+
             // Tag1 (Only)
             const t1 = poseRef.current;
 
@@ -557,6 +613,21 @@ const MapCanvas = ({
                         ✏️ Draw
                     </button>
                 </div>
+
+                <button
+                    onClick={() => setShowTestPoints(!showTestPoints)}
+                    className="btn btnGhost"
+                    style={{
+                        height: 36,
+                        padding: "0 12px",
+                        borderRadius: 10,
+                        fontSize: 12,
+                        background: showTestPoints ? "transparent" : "rgba(250, 204, 21, 0.15)",
+                        color: showTestPoints ? "var(--muted)" : "rgba(250, 204, 21, 1)",
+                    }}
+                >
+                    {showTestPoints ? "Hide Pts" : "Show Pts"}
+                </button>
 
                 <button
                     onClick={() => setShowTags(!showTags)}
