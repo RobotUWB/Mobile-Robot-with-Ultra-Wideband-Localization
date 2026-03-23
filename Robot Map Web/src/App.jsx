@@ -215,9 +215,9 @@ const FIELD_W = 3000;
 const FIELD_H = 2000;
 
 // WebSocket Control (192.168.88.115:81)
-const CMD_WS_URL = "ws://192.168.88.115:81";
+const CMD_WS_URL = "ws://10.10.10.50:81";
 // WebSocket UWB (192.168.88.99:81)
-const UWB_WS_URL = "ws://192.168.88.99:81";
+const UWB_WS_URL = "ws://10.10.10.55:81";
 const WS_MAX_MISSED = 20;
 
 const ZOOM_MIN = 0.05,
@@ -297,6 +297,26 @@ export default function App() {
   const [showTags, setShowTags] = useState(true);
   const [toast, setToast] = useState({ show: false, msg: "", type: "info" });
   const [navTarget, setNavTarget] = useState(null); // { x_m, y_m } — confirmed nav destination
+  const [clearPathTrigger, setClearPathTrigger] = useState(0); // Tell MapCanvas to clear drawn path
+  const lastCommandRef = useRef(null); // ✅ Store last command for Resume
+  const [showAdvancedPanels, setShowAdvancedPanels] = useState(false); // ✅ Toggle Advanced Tools
+  const showAdvancedPanelsRef = useRef(false);
+
+  // ✅ New States for CSV Logging
+  const [plannedRoute, setPlannedRoute] = useState([]);
+  const [actualTrajectory, setActualTrajectory] = useState([]);
+  const [isRecording, setIsRecording] = useState(false);
+  const isRecordingRef = useRef(false);
+  useEffect(() => { isRecordingRef.current = isRecording; }, [isRecording]);
+
+  // Deadzones Configuration
+  const [showDeadZones, setShowDeadZones] = useState(false);
+  const [deadZones, setDeadZones] = useState({
+    A1: 50, // cm
+    A2: 30, // cm
+    A3: 50, // cm
+    A4: 30, // cm
+  });
 
   /* --- Refs for Animation Loop --- */
   const anchorsRef = useRef(anchors);
@@ -314,6 +334,34 @@ export default function App() {
   const showToast = (msg, type = "info") => {
     setToast({ show: true, msg, type });
     setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 2600);
+  };
+
+  // ✅ CSV EXPORT HELPERS
+  const exportCSV = (filename, dataRows, headers) => {
+    if (dataRows.length === 0) {
+      showToast("No data to export", "warning");
+      return;
+    }
+    const csvContent = [headers.join(","), ...dataRows.map(row => row.join(","))].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast(`Exported ${filename}`, "success");
+  };
+
+  const exportPlannedRoute = () => {
+    const rows = plannedRoute.map((p, i) => [i + 1, p.x_m.toFixed(3), p.y_m.toFixed(3)]);
+    exportCSV("planned_route.csv", rows, ["Point_ID", "X_m", "Y_m"]);
+  };
+
+  const exportActualTrajectory = () => {
+    const rows = actualTrajectory.map((p, i) => [i + 1, p.time_ms, p.x_m.toFixed(3), p.y_m.toFixed(3), p.rmse?.toFixed(4) || "0.0000"]);
+    exportCSV("actual_trajectory.csv", rows, ["Point_ID", "Timestamp_ms", "X_m", "Y_m", "RMSE"]);
   };
 
   /* --- API Actions (Control Fallback) --- */
@@ -404,6 +452,16 @@ export default function App() {
     isPausedRef2.current = isPaused;
   }, [isPaused]);
 
+  useEffect(() => {
+    showAdvancedPanelsRef.current = showAdvancedPanels;
+    if (!showAdvancedPanels && pressedKeysRef.current.length > 0) {
+      pressedKeysRef.current = [];
+      setDriveKey(null);
+      setRotKey(null);
+      if (!stopHeldRef.current) sendDriveCmd("STOP");
+    }
+  }, [showAdvancedPanels]);
+
   const isTypingTarget = (el) => {
     if (!el) return false;
     const tag = (el.tagName || "").toUpperCase();
@@ -412,6 +470,10 @@ export default function App() {
 
   // Function to send drive command (WebSocket Preferred, fallback to HTTP)
   const sendDriveCmd = async (cmdVal) => {
+    if (cmdVal !== "STOP" && cmdVal !== "H") {
+      lastCommandRef.current = cmdVal; // ✅ Save for Resume
+    }
+
     // 1. WebSocket (Text Mode)
     if (wsCmdRef.current && wsCmdRef.current.readyState === WebSocket.OPEN) {
       wsCmdRef.current.send(cmdVal);
@@ -544,6 +606,7 @@ export default function App() {
     };
 
     const onKeyDown = (e) => {
+      if (!showAdvancedPanelsRef.current) return;
       if (isTypingTarget(e.target)) return;
 
       if (e.code === "Space") {
@@ -570,6 +633,7 @@ export default function App() {
     };
 
     const onKeyUp = (e) => {
+      if (!showAdvancedPanelsRef.current) return;
       if (isTypingTarget(e.target)) return;
 
       if (e.code === "Space") {
@@ -627,6 +691,18 @@ export default function App() {
         console.log("WS-UWB: Connected");
         setConnected(true);
         missedHeartbeatsRef.current = 0;
+
+        // Send immediate heartbeat so ESP doesn't timeout
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send("PING");
+        }
+
+        // Heartbeat interval for UWB
+        uwbHeartbeatInterval = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send("PING");
+          }
+        }, 100);
       };
 
       ws.onmessage = (event) => {
@@ -651,11 +727,24 @@ export default function App() {
             const minY = Math.min(...ys);
             const maxY = Math.max(...ys);
 
+            const newX = clamp(xVal * 1000, minX, maxX);
+            const newY = clamp(yVal * 1000, minY, maxY);
+
             setPose((prev) => ({
-              x_mm: clamp(xVal * 1000, minX, maxX),
-              y_mm: clamp(yVal * 1000, minY, maxY),
+              x_mm: newX,
+              y_mm: newY,
               yaw: prev.yaw,
             }));
+
+            // ✅ Record Trajectory if recording is ON
+            if (isRecordingRef.current) {
+                setActualTrajectory(prev => [...prev, {
+                    time_ms: Date.now(),
+                    x_m: newX / 1000,
+                    y_m: newY / 1000,
+                    rmse: Number.isFinite(Number(j.rmse)) ? Number(j.rmse) : 0
+                }]);
+            }
           }
 
           // Anchor distances
@@ -704,10 +793,12 @@ export default function App() {
       };
     };
 
+    let uwbHeartbeatInterval = null;
     connectWsUwb();
 
     return () => {
       isMounted.current = false;
+      if (uwbHeartbeatInterval) clearInterval(uwbHeartbeatInterval);
       if (uwbReconnectTimeout) clearTimeout(uwbReconnectTimeout);
       if (uwbWsRef.current) {
         uwbWsRef.current.onclose = null; // Prevent re-triggering cleanup logic
@@ -737,6 +828,12 @@ export default function App() {
         }
         console.log("WS-CMD: Connected");
         setWsConnected(true);
+
+        // Immediate ping to reset timeout
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send("PING");
+          ws.send("H");
+        }
 
         // Consolidated heartbeat: Send "PING" to reset timeout & "H" for heartbeat
         // WEB_TIMEOUT_MS on ESP32 is 300ms, so we send every 100ms
@@ -809,6 +906,7 @@ export default function App() {
     const cmdVal = `GOTO:${x.toFixed(2)}:${y.toFixed(2)}`;
     // Send via WebSocket (Control ESP)
     if (wsCmdRef.current && wsCmdRef.current.readyState === WebSocket.OPEN) {
+      lastCommandRef.current = cmdVal; // ✅ Save for Resume
       wsCmdRef.current.send(cmdVal);
       setNavTarget({ x_m: x, y_m: y }); // ✅ Show marker on map
       showToast(`Going to X:${x.toFixed(2)} Y:${y.toFixed(2)}`, "info");
@@ -816,6 +914,34 @@ export default function App() {
       showToast("Control WS not connected", "error");
     }
   };
+
+  const handleRouteComplete = (pathPoints) => {
+    if (pathPoints.length > 0) {
+      setPlannedRoute(pathPoints); // ✅ Save planned route naturally when drawing finishes
+    }
+
+    if (wsCmdRef.current && wsCmdRef.current.readyState === WebSocket.OPEN) {
+      if (pathPoints.length === 0) return;
+
+      // Limit to 50 points per user requirement
+      const limited = pathPoints.slice(0, 50);
+
+      // Map to x:y format
+      const pointStrings = limited.map(pt => `${pt.x_m.toFixed(2)}:${pt.y_m.toFixed(2)}`);
+      const cmdStr = `GOTO:${pointStrings.join(':')}`;
+
+      // Set target to the final destination point for the UI marker
+      const finalDest = limited[limited.length - 1];
+      setNavTarget({ x_m: finalDest.x_m, y_m: finalDest.y_m });
+
+      lastCommandRef.current = cmdStr; // ✅ Save for Resume
+      wsCmdRef.current.send(cmdStr);
+      showToast(`Started Route (${limited.length} points)`, "info");
+    } else {
+      showToast("Control WS not connected", "error");
+    }
+  };
+
 
   return (
     <>
@@ -868,22 +994,25 @@ export default function App() {
           }}
         >
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-            <div
+            <button
+              onClick={() => setShowAdvancedPanels(!showAdvancedPanels)}
               style={{
                 width: 40,
                 height: 40,
-                background: "rgba(255,255,255,0.04)",
-                border: "1px solid rgba(255,255,255,0.10)",
+                background: showAdvancedPanels ? "rgba(59,130,246,0.15)" : "rgba(255,255,255,0.04)",
+                border: showAdvancedPanels ? "1px solid rgba(59,130,246,0.40)" : "1px solid rgba(255,255,255,0.10)",
                 borderRadius: 10,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                color: "var(--muted)",
+                color: showAdvancedPanels ? "var(--accent)" : "var(--muted)",
+                cursor: "pointer",
+                transition: "all 0.2s ease"
               }}
-              title="ESP32: Dual Setup (Pos=.53, Cmd=.115)"
+              title="Toggle Advanced Features (Joystick & Data Logs)"
             >
               <Icons.Wifi />
-            </div>
+            </button>
 
             <div>
               <h1
@@ -982,18 +1111,70 @@ export default function App() {
             />
 
             {/* Manual Drive (TEST) */}
-            <Joystick
-              rotKey={rotKey}
-              driveKey={driveKey}
-              stopHeld={stopHeld}
-              connected={connected}
-              rotatePress={rotatePress}
-              rotateRelease={rotateRelease}
-              manualPress={manualPress}
-              manualRelease={manualRelease}
-              stopHoldPress={stopHoldPress}
-              stopHoldRelease={stopHoldRelease}
-            />
+            {showAdvancedPanels && (
+              <Joystick
+                rotKey={rotKey}
+                driveKey={driveKey}
+                stopHeld={stopHeld}
+                connected={connected}
+                rotatePress={rotatePress}
+                rotateRelease={rotateRelease}
+                manualPress={manualPress}
+                manualRelease={manualRelease}
+                stopHoldPress={stopHoldPress}
+                stopHoldRelease={stopHoldRelease}
+              />
+            )}
+
+            {/* Dead Zones Config */}
+            <div className="panel" style={{ padding: "14px 16px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <div className="sectionTitle" style={{ marginBottom: 0 }}>Dangerous zone</div>
+                <button
+                  onClick={() => setShowDeadZones(!showDeadZones)}
+                  className="btn btnGhost"
+                  style={{
+                    height: 28,
+                    padding: "0 10px",
+                    borderRadius: 8,
+                    fontSize: 11,
+                    color: showDeadZones ? "rgba(239, 68, 68, 1)" : "inherit",
+                    background: showDeadZones ? "rgba(239, 68, 68, 0.15)" : "transparent"
+                  }}
+                >
+                  {showDeadZones ? "HIDE" : "SHOW"}
+                </button>
+              </div>
+
+              {showDeadZones && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  {["A1", "A2", "A3", "A4"].map(anchor => (
+                    <div key={anchor} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "rgba(0,0,0,0.2)", padding: "6px 10px", borderRadius: 8 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{anchor}</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <button
+                          className="btn btnGhost"
+                          style={{ width: 24, height: 24, padding: 0, minWidth: 24, borderRadius: 4 }}
+                          onClick={() => setDeadZones(prev => ({ ...prev, [anchor]: Math.max(0, prev[anchor] - 10) }))}
+                        >
+                          -
+                        </button>
+                        <span style={{ fontSize: 13, width: 36, textAlign: "center", fontFamily: "'JetBrains Mono', monospace" }}>
+                          {deadZones[anchor]}cm
+                        </span>
+                        <button
+                          className="btn btnGhost"
+                          style={{ width: 24, height: 24, padding: 0, minWidth: 24, borderRadius: 4 }}
+                          onClick={() => setDeadZones(prev => ({ ...prev, [anchor]: prev[anchor] + 10 }))}
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
             {/* Navigation Target */}
             {navTarget && (
@@ -1025,20 +1206,75 @@ export default function App() {
                       borderRadius: 8,
                       fontSize: 11,
                     }}
-                    onClick={() => setNavTarget(null)}
+                    onClick={() => {
+                      setNavTarget(null);
+                      setClearPathTrigger((prev) => prev + 1); // Tell MapCanvas to clear path
+                      lastCommandRef.current = null; // ✅ Clear last cmd
+                      sendDriveCmd("STOP"); // Stop robot if clearing active route
+                      showToast("Route Cleared", "info");
+                    }}
                   >
                     CLEAR
                   </button>
                 </div>
               </div>
             )}
+
+            {/* ✅ Data Logging / CSV Export */}
+            {showAdvancedPanels && (
+              <div className="panel" style={{ padding: "14px 16px" }}>
+                <div className="sectionTitle" style={{ marginBottom: 12 }}>DATA LOGGING (CSV)</div>
+                <div style={{ display: "grid", gap: 10 }}>
+                  {/* Planned Route */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                     <span style={{ fontSize: 13, color: "var(--text)" }}>Planned: {plannedRoute.length} pts</span>
+                     <button className="btn btnGhost" style={{ height: 28, fontSize: 11, borderRadius: 6 }} onClick={exportPlannedRoute} disabled={plannedRoute.length === 0}>
+                        ⬇️ CSV
+                     </button>
+                  </div>
+
+                  {/* Actual Trajectory */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+                     <span style={{ fontSize: 13, color: "var(--text)" }}>Actual: {actualTrajectory.length} pts</span>
+                     <div style={{ display: "flex", gap: 6 }}>
+                       <button 
+                          className="btn btnGhost" 
+                          style={{ height: 28, fontSize: 11, borderRadius: 6, color: isRecording ? "var(--danger)" : "var(--success)" }} 
+                          onClick={() => setIsRecording(!isRecording)}>
+                          {isRecording ? "⏹ STOP" : "⏺ REC"}
+                       </button>
+                       <button className="btn btnGhost" style={{ height: 28, fontSize: 11, borderRadius: 6 }} onClick={exportActualTrajectory} disabled={actualTrajectory.length === 0}>
+                          ⬇️ CSV
+                       </button>
+                     </div>
+                  </div>
+
+                  {/* Clear Data */}
+                  {(actualTrajectory.length > 0 || plannedRoute.length > 0) && (
+                     <button className="btn btnGhost" style={{ height: 28, fontSize: 11, borderRadius: 6, marginTop: 4, width: "100%", color: "var(--danger)" }} onClick={() => { setActualTrajectory([]); setPlannedRoute([]); }}>
+                        🗑️ CLEAR DATA
+                     </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Controls (ล่างสุด) */}
             <div style={{ marginTop: "auto", display: "grid", gap: 10 }}>
               <button
                 onClick={async () => {
                   if (isPaused) {
                     setIsPaused(false);
-                    showToast("RESUME (unlocked)", "success");
+                    if (lastCommandRef.current) {
+                      if (wsCmdRef.current && wsCmdRef.current.readyState === WebSocket.OPEN) {
+                        wsCmdRef.current.send(lastCommandRef.current);
+                      } else {
+                        sendDriveCmd(lastCommandRef.current);
+                      }
+                      showToast(`RESUME: ${lastCommandRef.current.substring(0, 15)}...`, "success");
+                    } else {
+                      showToast("RESUME (No prior commands)", "success");
+                    }
                   } else {
                     sendDriveCmd("STOP");
                     setIsPaused(true);
@@ -1105,7 +1341,11 @@ export default function App() {
             FIELD_W={FIELD_W}
             FIELD_H={FIELD_H}
             onMapClick={handleMapClick}
+            onRouteComplete={handleRouteComplete}
             navTarget={navTarget}
+            clearPathTrigger={clearPathTrigger}
+            showDeadZones={showDeadZones}
+            deadZones={deadZones}
           />
         </div>
       </div>
