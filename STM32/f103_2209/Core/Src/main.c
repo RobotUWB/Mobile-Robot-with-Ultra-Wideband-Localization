@@ -2,7 +2,7 @@
 /**
  ******************************************************************************
  * @file           : main.c
- * @brief          : ROS-Style Velocity Control (Differential Drive) - FIXED
+ * @brief          : ROS-Style Velocity Control (Differential Drive) + BNO055
  ******************************************************************************
  */
 /* USER CODE END Header */
@@ -32,11 +32,14 @@
 
 // UART Buffer
 #define RX_BUFFER_SIZE      64
-//Address ของ ICM-20948 (SPI)
-#define ICM_REG_BANK_SEL    0x7F
-#define ICM_REG_PWR_MGMT_1  0x06
-#define ICM_REG_GYRO_ZOUT_H 0x37
-#define ICM_REG_WHO_AM_I    0x00
+
+// --- BNO055 Config ---
+#define BNO055_I2C_ADDR         (0x28 << 1)
+#define BNO055_CONFIG_MODE      0x00
+#define BNO055_IMU_MODE         0x08  // โหมด IMU (Gyro + Accel) ตัดแม่เหล็กออกกันกวน
+#define BNO055_OPR_MODE_ADDR    0x3D
+#define BNO055_EULER_H_LSB_ADDR 0x1A
+#define BNO055_CALIB_DATA_ADDR  0x55
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -45,12 +48,12 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-SPI_HandleTypeDef hspi2;
+I2C_HandleTypeDef hi2c1;
 
 TIM_HandleTypeDef htim2;
 
 UART_HandleTypeDef huart1;
-UART_HandleTypeDef huart2;
+UART_HandleTypeDef huart2; //debug
 UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
@@ -72,13 +75,15 @@ uint32_t last_step_time_R = 0;
 uint32_t last_update_time = 0;
 
 // IMU Variables
-uint32_t last_imu_time = 0;
-int16_t raw_gyro_z = 0;
-float gyro_z_dps = 0;
-float gyro_z_offset = 0;
+float robot_heading = 0.0f;   // มุมสะสม (Heading) จาก BNO055
 
-float robot_heading = 0.0f;   // มุมสะสม (Heading)
-uint32_t prev_imu_time = 0;   // เวลาล่าสุดที่คำนวณ (ใช้ micros)
+uint32_t last_cmd_time = 0;
+uint8_t is_timeout = 0;
+
+// 🔥 เอาค่า 22 ตัวที่ดูดมาได้ มาใส่แทนที่ตรงนี้นะครับ 🔥
+uint8_t saved_calib_profile[22] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00 };
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -88,13 +93,12 @@ static void MX_USART1_UART_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_TIM2_Init(void);
-static void MX_SPI2_Init(void);
+static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
 void Parse_Command(char *cmd);
 void TMC2209_Init(void);
-
-void ICM_Init(void);
-void ICM_ReadGyroZ(void);
+void BNO055_Init(void);
+void BNO055_ReadEuler(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -103,17 +107,16 @@ void ICM_ReadGyroZ(void);
 void Force_UART3_GPIO_Init(void) {
 	GPIO_InitTypeDef GPIO_InitStruct = { 0 };
 
-	// 1. 🔥 เปิด Clock สำคัญ 2 ตัว (คราวที่แล้วลืมบรรทัดที่ 2 ขอโทษครับ!)
-	__HAL_RCC_GPIOB_CLK_ENABLE();// ไฟเลี้ยงขา PB
-	__HAL_RCC_USART3_CLK_ENABLE();  // ไฟเลี้ยงสมอง UART3 <--- ตัวนี้สำคัญมาก!
+	__HAL_RCC_GPIOB_CLK_ENABLE();
+	__HAL_RCC_USART3_CLK_ENABLE();
 
-	// 2. ตั้งค่าขา PB10 (TX)
 	GPIO_InitStruct.Pin = GPIO_PIN_10;
-	GPIO_InitStruct.Mode = GPIO_MODE_AF_PP; // โหมดส่งข้อมูล
+	GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
 	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 }
-// --- 🕒 TIME KEEPER (จับเวลาละเอียดระดับ us) ---
+
+// --- 🕒 TIME KEEPER ---
 void DWT_Init(void) {
 	if (!(CoreDebug->DEMCR & CoreDebug_DEMCR_TRCENA_Msk)) {
 		CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
@@ -126,20 +129,14 @@ uint32_t micros(void) {
 	return DWT->CYCCNT / 72; // 72MHz
 }
 
-// --- 🏎️ KINEMATICS ENGINE (ทำงานตลอดเวลา) ---
+// --- 🏎️ KINEMATICS ENGINE ---
 void Run_Motors_Loop(void) {
-
-	// 1. คำนวณความเร็วเป้าหมายของแต่ละล้อ (Differential Drive)
-	// V_L = v - w
-	// V_R = v + w
 	float target_v_L = target_v - target_w;
 	float target_v_R = target_v + target_w;
 
-	// 2. Ramp Generator (Soft Start/Stop) - อัปเดตทุก 1ms
 	if (micros() - last_update_time > 1000) {
 		last_update_time = micros();
 
-		// Soft Start L
 		if (current_v_L < target_v_L)
 			current_v_L += ACCEL;
 		if (current_v_L > target_v_L)
@@ -147,7 +144,6 @@ void Run_Motors_Loop(void) {
 		if (abs(current_v_L - target_v_L) < ACCEL)
 			current_v_L = target_v_L;
 
-		// Soft Start R
 		if (current_v_R < target_v_R)
 			current_v_R += ACCEL;
 		if (current_v_R > target_v_R)
@@ -156,33 +152,25 @@ void Run_Motors_Loop(void) {
 			current_v_R = target_v_R;
 	}
 
-	// 3. Step Generator (Motor L)
 	if (abs(current_v_L) > 5.0f) {
-		// ตั้งทิศทาง
 		HAL_GPIO_WritePin(DIR_L_GPIO_Port, DIR_L_Pin,
 				(current_v_L > 0) ? GPIO_PIN_SET : GPIO_PIN_RESET);
-
-		// คำนวณ Delay
 		uint32_t step_delay = (uint32_t) (1000000.0f
 				/ (abs(current_v_L) * STEPS_PER_MM));
-
 		if (micros() - last_step_time_L >= step_delay) {
 			last_step_time_L = micros();
 			HAL_GPIO_WritePin(STEP_L_GPIO_Port, STEP_L_Pin, GPIO_PIN_SET);
 			for (volatile int i = 0; i < 10; i++)
-				__NOP(); // Pulse width
+				__NOP();
 			HAL_GPIO_WritePin(STEP_L_GPIO_Port, STEP_L_Pin, GPIO_PIN_RESET);
 		}
 	}
 
-	// 4. Step Generator (Motor R)
 	if (abs(current_v_R) > 5.0f) {
 		HAL_GPIO_WritePin(DIR_R_GPIO_Port, DIR_R_Pin,
 				(current_v_R > 0) ? GPIO_PIN_SET : GPIO_PIN_RESET);
-
 		uint32_t step_delay = (uint32_t) (1000000.0f
 				/ (abs(current_v_R) * STEPS_PER_MM));
-
 		if (micros() - last_step_time_R >= step_delay) {
 			last_step_time_R = micros();
 			HAL_GPIO_WritePin(STEP_R_GPIO_Port, STEP_R_Pin, GPIO_PIN_SET);
@@ -193,121 +181,93 @@ void Run_Motors_Loop(void) {
 	}
 }
 
-// --- ICM-20948 SPI Functions ---
-void ICM_SelectBank(uint8_t bank) {
-	uint8_t tx[2] = { ICM_REG_BANK_SEL & 0x7F, (bank << 4) };
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET); // CS Low
-	HAL_SPI_Transmit(&hspi2, tx, 2, 10);
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);   // CS High
-}
+void BNO055_Init(void) {
+	uint8_t mode = BNO055_CONFIG_MODE;
 
-uint8_t ICM_ReadByte(uint8_t reg) {
-	uint8_t tx_data[2];
-	uint8_t rx_data[2];
+	// 1. เข้า Config Mode (เปลี่ยนเป็นวนลูปรอจนกว่าจะตื่นและตอบรับ)
+	while(HAL_I2C_Mem_Write(&hi2c1, BNO055_I2C_ADDR, BNO055_OPR_MODE_ADDR, 1, &mode,
+			1, 100) != HAL_OK) {
+		char msg[] = "WAITING FOR BNO055 TO WAKE UP...\n";
+		HAL_UART_Transmit(&huart2, (uint8_t*) msg, strlen(msg), 10);
+		HAL_Delay(100);
+	}
+	HAL_Delay(50);
 
-	// Byte 1: ส่ง Address + Read Bit (0x80)
-	tx_data[0] = reg | 0x80;
-	// Byte 2: ส่ง Dummy (0x00) เพื่อสร้าง Clock ให้เซนเซอร์ส่งข้อมูลกลับมา
-	tx_data[1] = 0x00;
+	// 2. โหลดค่า Calibration Profile
+	HAL_I2C_Mem_Write(&hi2c1, BNO055_I2C_ADDR, BNO055_CALIB_DATA_ADDR, 1,
+			saved_calib_profile, 22, 100);
+	HAL_Delay(50);
 
-	// 1. ดึง CS ลงเพื่อเริ่มคุย
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);
+	// 3. เข้า IMU Mode
+	mode = BNO055_IMU_MODE;
+	HAL_I2C_Mem_Write(&hi2c1, BNO055_I2C_ADDR, BNO055_OPR_MODE_ADDR, 1, &mode,
+			1, 100);
+	HAL_Delay(50);
 
-	// 2. ส่งและรับพร้อมกัน 2 Byte
-	// (จังหวะแรกเราส่ง Address เซนเซอร์จะยังไม่ตอบ)
-	// (จังหวะสองเราส่ง Dummy เซนเซอร์จะตอบข้อมูลมาใส่ใน rx_data[1])
-	HAL_SPI_TransmitReceive(&hspi2, tx_data, rx_data, 2, 100);
-
-	// 3. ยก CS ขึ้นจบการคุย
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);
-
-	// ข้อมูลที่แท้จริงจะอยู่ที่ Byte ที่ 2
-	return rx_data[1];
-}
-
-void ICM_WriteByte(uint8_t reg, uint8_t data) {
-	uint8_t tx[2] = { reg & 0x7F, data };
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET); // CS Low
-	HAL_SPI_Transmit(&hspi2, tx, 2, 10);
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);   // CS High
-}
-
-void ICM_Init(void) {
-	// 1. Reset
-	ICM_SelectBank(0);
-	HAL_Delay(10);
-	ICM_WriteByte(ICM_REG_PWR_MGMT_1, 0x80); // Hard Reset
-	HAL_Delay(100);
-
-	// 2. Wake Up
-	ICM_WriteByte(ICM_REG_PWR_MGMT_1, 0x01); // Auto Clock Select
-	HAL_Delay(100);
-
-	// 3. 🔥 เปิด DLPF (Low Pass Filter) เพื่อลด Noise 🔥
-	// ต้องสลับไป Bank 2 เพื่อแก้ GYRO_CONFIG_1
-	ICM_SelectBank(2);
-	// GYRO_CONFIG_1 (Addr 0x01)
-	// Bit[0] = 0 (Enable DLPF)
-	// Bit[5:3] = 3 (Bandwidth ~50Hz) -> กรองความถี่สูงออก ค่าจะนิ่งขึ้น
-	ICM_WriteByte(0x01, 0x19); // 00011001b
-
-	// กลับมา Bank 0
-	ICM_SelectBank(0);
-	HAL_Delay(100);
-
-	// 4. Debug: Read ID
-	uint8_t whoami = ICM_ReadByte(ICM_REG_WHO_AM_I);
-	char log[32];
-	sprintf(log, "ICM ID: 0x%02X (Filter ON)\n", whoami);
-	HAL_UART_Transmit(&huart2, (uint8_t*) log, strlen(log), 100);
-}
-
-void ICM_ReadGyroZ(void) {
-	ICM_SelectBank(0);
-	uint8_t h = ICM_ReadByte(ICM_REG_GYRO_ZOUT_H);
-	uint8_t l = ICM_ReadByte(ICM_REG_GYRO_ZOUT_H + 1);
-
-	raw_gyro_z = (int16_t) ((h << 8) | l);
-
-	// แปลงเป็น dps แล้วลบ Offset ออก!
-	gyro_z_dps = ((float) raw_gyro_z / 131.0f) - gyro_z_offset;
-}
-void ICM_Calibrate(void) {
-	char msg[] = "Calibrating Gyro... KEEP STILL!\n";
+	char msg[] = "BNO055 READY (IMU MODE & CALIBRATED)\n";
 	HAL_UART_Transmit(&huart2, (uint8_t*) msg, strlen(msg), 100);
+}
 
-	float sum = 0;
-	int samples = 200; // อ่าน 200 ครั้งเพื่อหาค่าเฉลี่ย
+void I2C_ClearBus(void) {
+	GPIO_InitTypeDef GPIO_InitStruct = { 0 };
 
-	for (int i = 0; i < samples; i++) {
-		ICM_ReadGyroZ(); // อ่านค่า
-		sum += gyro_z_dps; // บวกสะสม (ยังไม่ลบ offset)
-		HAL_Delay(5);
+	__HAL_RCC_GPIOB_CLK_ENABLE();
+
+	// เซ็ตขา SCL (PB6) และ SDA (PB7) เป็นโหมดส่งออก (Output Open-Drain) ชั่วคราว
+	GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_7;
+	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+	GPIO_InitStruct.Pull = GPIO_NOPULL;
+	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET); // ปล่อย SDA ให้เป็น High
+
+	// กระตุ้น Clock (SCL) 9 ครั้ง ทิ้งบิตค้างในเซ็นเซอร์ให้ชิปคายคลื่นออกมา
+	for (int i = 0; i < 9; i++) {
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
+		for(volatile int j=0; j<1000; j++) __NOP(); // หน่วงเวลาเล็กน้อย
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
+		for(volatile int j=0; j<1000; j++) __NOP();
 	}
 
-	gyro_z_offset = sum / samples; // หาค่าเฉลี่ยความผิดพลาด
-
-	char log[64];
-	sprintf(log, "Done! Offset: %.2f\n", gyro_z_offset);
-	HAL_UART_Transmit(&huart2, (uint8_t*) log, strlen(log), 100);
+	// สร้างฉากจบ (STOP condition: ให้ SDA ขึ้นตอนที่ SCL เป็น High)
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
+	for(volatile int j=0; j<1000; j++) __NOP();
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
+	for(volatile int j=0; j<1000; j++) __NOP();
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
+	for(volatile int j=0; j<1000; j++) __NOP();
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
+	for(volatile int j=0; j<1000; j++) __NOP();
 }
-void Update_Heading(void) {
-    // 1. อ่านค่า Gyro ปัจจุบัน (และลบ Offset ที่ Calibrate แล้ว)
-    ICM_ReadGyroZ();
 
-    // 2. คำนวณเวลาที่ผ่านไป (dt) เป็นวินาที
-    uint32_t now = micros();
-    float dt = (now - prev_imu_time) / 1000000.0f; // แปลง us เป็น s
-    prev_imu_time = now;
+void BNO055_ReadEuler(void) {
+	uint8_t rx_data[2];
+	static uint8_t error_count = 0; // สำหรับนับจำนวนครั้งที่ Error
 
-    // 3. ป้องกันบั๊กเวลา dt กระโดด (เช่น รอบแรกสุด)
-    if (dt > 1.0f) dt = 0;
+	if (HAL_I2C_Mem_Read(&hi2c1, BNO055_I2C_ADDR, BNO055_EULER_H_LSB_ADDR,
+			I2C_MEMADD_SIZE_8BIT, rx_data, 2, 10) == HAL_OK) {
+		int16_t raw_heading = (int16_t) ((rx_data[1] << 8) | rx_data[0]);
+		robot_heading = raw_heading / 16.0f;
+		error_count = 0; // ถ้าระบบอ่านสำเร็จให้รีเซ็ตตัวนับ
+	} else {
+		error_count++;
+	}
 
-    // 4. คำนวณมุมสะสม (Integration)
-    // ถ้า Gyro นิ่งจริง (น้อยกว่า 0.05 dps) ไม่ต้องบวก (Deadband) เพื่อตัด Noise
-    if (fabsf(gyro_z_dps) > 1.5f) {
-        robot_heading += gyro_z_dps * dt;
-    }
+	// ถ้าระบบ I2C ค้าง อ่านไม่ได้ติดต่อกัน 50 รอบ -> สั่งกู้คืนระบบใหม่ (Recovery)
+	if (error_count > 50) {
+		char msg[] = "I2C ERROR: Hard Resetting I2C Bus...\n";
+		HAL_UART_Transmit(&huart2, (uint8_t*) msg, strlen(msg), 10);
+		
+		HAL_I2C_DeInit(&hi2c1);  // ปิด I2C เพื่อเคลียร์สถานะเออเร่อ
+		HAL_Delay(5);
+		I2C_ClearBus();         // เคลียร์สายให้ Slave ปล่อยขา SDA
+		HAL_Delay(5);
+		MX_I2C1_Init();         // สั่งตั้งค่า I2C ใหม่ (ฟังก์ชันเดิมที่แอตทริคสร้างไว้)
+		HAL_Delay(10);
+		BNO055_Init();          // สั่ง Config ค่าเริ่มต้นของ BNO055 ใหม่อีกครั้ง
+		error_count = 0;
+	}
 }
 /* USER CODE END 0 */
 
@@ -343,15 +303,18 @@ int main(void) {
 	MX_USART3_UART_Init();
 	MX_USART2_UART_Init();
 	MX_TIM2_Init();
-	MX_SPI2_Init();
+	MX_I2C1_Init();
 	/* USER CODE BEGIN 2 */
-	HAL_Delay(100);
-	ICM_Init();
-	HAL_Delay(100);
-	ICM_Calibrate();
+	HAL_Delay(800); // 💥 เพิ่มเวลาหน่วงให้ BNO055 บูตเสร็จชัวร์ๆ ตอนเปิดเครื่อง
 
-	DWT_Init(); // เริ่มตัวจับเวลาละเอียด
+	// เรียกใช้ BNO055 แทน ICM
+	BNO055_Init();
+
+	DWT_Init();
 	HAL_Delay(1000);
+
+	// เติมบรรทัดนี้เพื่อบังคับเปิดพิน UART3 ให้คุยกับมอเตอร์รู้เรื่อง
+	Force_UART3_GPIO_Init();
 	TMC2209_Init();
 
 	HAL_GPIO_WritePin(GPIOA, EN_Pin, GPIO_PIN_RESET);
@@ -359,7 +322,7 @@ int main(void) {
 	// Start Receiving
 	HAL_UART_Receive_IT(&huart1, &rx_byte, 1);
 
-	char msg[] = "\nROS-STYLE READY\n";
+	char msg[] = "\nROS-STYLE READY (BNO055)\n";
 	HAL_UART_Transmit(&huart2, (uint8_t*) msg, strlen(msg), 100);
 	/* USER CODE END 2 */
 
@@ -371,32 +334,56 @@ int main(void) {
 			Parse_Command((char*) rx_buffer);
 		}
 
-		if (HAL_GetTick() - last_imu_time > 10) {
-			last_imu_time = HAL_GetTick();
+		// Watchdog 200ms
+		if (HAL_GetTick() - last_cmd_time > 200) {
+			if ((target_v != 0 || target_w != 0) && is_timeout == 0) {
+				target_v = 0;
+				target_w = 0;
+				current_v_L = 0;
+				current_v_R = 0;
+				is_timeout = 1;
 
-			Update_Heading(); // เรียกฟังก์ชันคำนวณมุม
-
-			//print
-			static uint8_t print_count = 0;
-			if (++print_count >= 10) {
-				print_count = 0;
-				char log[64];
-				// โชว์ทั้งความเร็ว (GZ) และมุมสะสม (ANG)
-				sprintf(log, "GZ: %.2f | ANG: %.2f\n", gyro_z_dps,
-						robot_heading);
-				HAL_UART_Transmit(&huart2, (uint8_t*) log, strlen(log), 10);
+				char timeout_msg[] = "WARNING: Signal Lost! Auto Stopped.\n";
+				HAL_UART_Transmit(&huart2, (uint8_t*) timeout_msg,
+						strlen(timeout_msg), 10);
 			}
 		}
 
+		// อ่านค่า BNO055 ทุกๆ 10ms
+		static uint32_t last_imu_time_loop = 0;
+		if (HAL_GetTick() - last_imu_time_loop >= 10) {
+			last_imu_time_loop = HAL_GetTick();
+			BNO055_ReadEuler();
+		}
+
+		// Print Log ออก Debug
+		static uint32_t last_print_time = 0;
+		if (HAL_GetTick() - last_print_time >= 500) {
+			last_print_time = HAL_GetTick();
+			char log[64];
+			sprintf(log, "Heading: %.2f\n", robot_heading);
+			HAL_UART_Transmit(&huart2, (uint8_t*) log, strlen(log), 10);
+		}
+
+		// ส่ง Telemetry ไป ESP32 พร้อม Checksum
 		static uint32_t last_telemetry = 0;
 		if (HAL_GetTick() - last_telemetry > 200) {
 			last_telemetry = HAL_GetTick();
 
-			char tx_buf[32];
-			// ส่งรูปแบบ "A=มุม\n" (เช่น A=90.50)
-			sprintf(tx_buf, "A=%.2f\n", robot_heading);
+			char payload[32];
+			sprintf(payload, "A=%.2f", robot_heading);
+
+			uint8_t cs = 0;
+			for (int i = 0; i < strlen(payload); i++) {
+				cs ^= payload[i];
+			}
+
+			char tx_buf[64];
+			sprintf(tx_buf, "%s*%02X\n", payload, cs);
 			HAL_UART_Transmit(&huart1, (uint8_t*) tx_buf, strlen(tx_buf), 10);
 		}
+
+		// ขับมอเตอร์
 		Run_Motors_Loop();
 		/* USER CODE END WHILE */
 
@@ -442,38 +429,34 @@ void SystemClock_Config(void) {
 }
 
 /**
- * @brief SPI2 Initialization Function
+ * @brief I2C1 Initialization Function
  * @param None
  * @retval None
  */
-static void MX_SPI2_Init(void) {
+static void MX_I2C1_Init(void) {
 
-	/* USER CODE BEGIN SPI2_Init 0 */
+	/* USER CODE BEGIN I2C1_Init 0 */
 
-	/* USER CODE END SPI2_Init 0 */
+	/* USER CODE END I2C1_Init 0 */
 
-	/* USER CODE BEGIN SPI2_Init 1 */
+	/* USER CODE BEGIN I2C1_Init 1 */
 
-	/* USER CODE END SPI2_Init 1 */
-	/* SPI2 parameter configuration*/
-	hspi2.Instance = SPI2;
-	hspi2.Init.Mode = SPI_MODE_MASTER;
-	hspi2.Init.Direction = SPI_DIRECTION_2LINES;
-	hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
-	hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
-	hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;
-	hspi2.Init.NSS = SPI_NSS_SOFT;
-	hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_32;
-	hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
-	hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
-	hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-	hspi2.Init.CRCPolynomial = 10;
-	if (HAL_SPI_Init(&hspi2) != HAL_OK) {
+	/* USER CODE END I2C1_Init 1 */
+	hi2c1.Instance = I2C1;
+	hi2c1.Init.ClockSpeed = 400000;
+	hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_16_9;
+	hi2c1.Init.OwnAddress1 = 0;
+	hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+	hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+	hi2c1.Init.OwnAddress2 = 0;
+	hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+	hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+	if (HAL_I2C_Init(&hi2c1) != HAL_OK) {
 		Error_Handler();
 	}
-	/* USER CODE BEGIN SPI2_Init 2 */
+	/* USER CODE BEGIN I2C1_Init 2 */
 
-	/* USER CODE END SPI2_Init 2 */
+	/* USER CODE END I2C1_Init 2 */
 
 }
 
@@ -630,10 +613,8 @@ static void MX_GPIO_Init(void) {
 
 	/*Configure GPIO pin Output Level */
 	HAL_GPIO_WritePin(GPIOA,
-	EN_Pin | STEP_R_Pin | DIR_R_Pin | STEP_L_Pin | DIR_L_Pin, GPIO_PIN_RESET);
-
-	/*Configure GPIO pin Output Level */
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);
+			EN_Pin | STEP_R_Pin | DIR_R_Pin | STEP_L_Pin | DIR_L_Pin,
+			GPIO_PIN_RESET);
 
 	/*Configure GPIO pins : EN_Pin DIR_R_Pin DIR_L_Pin */
 	GPIO_InitStruct.Pin = EN_Pin | DIR_R_Pin | DIR_L_Pin;
@@ -649,13 +630,6 @@ static void MX_GPIO_Init(void) {
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
 	HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-	/*Configure GPIO pin : PB12 */
-	GPIO_InitStruct.Pin = GPIO_PIN_12;
-	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
 	/* USER CODE BEGIN MX_GPIO_Init_2 */
 
 	/* USER CODE END MX_GPIO_Init_2 */
@@ -663,7 +637,7 @@ static void MX_GPIO_Init(void) {
 
 /* USER CODE BEGIN 4 */
 
-// --- TMC Helper Functions (ที่หายไป ผมเติมให้แล้วครับ) ---
+// --- TMC Helper Functions ---
 uint8_t TMC_CRC8(uint8_t *data, size_t length) {
 	uint8_t crc = 0, currentByte;
 	for (size_t i = 0; i < length; i++) {
@@ -687,7 +661,6 @@ void TMC_Write_To_Addr(uint8_t addr, uint8_t reg, uint32_t data) {
 }
 
 void TMC_Write(uint8_t reg, uint32_t data) {
-	// ส่งมันทุก Address เลย (0, 1, 2, 3) กันพลาด!
 	TMC_Write_To_Addr(0x00, reg, data);
 	HAL_Delay(1);
 	TMC_Write_To_Addr(0x01, reg, data);
@@ -698,47 +671,61 @@ void TMC_Write(uint8_t reg, uint32_t data) {
 	HAL_Delay(1);
 }
 void TMC2209_Init(void) {
-	// 1. 🟢 แก้ความสมูท: เปลี่ยนจาก SpreadCycle เป็น StealthChop
-	// ของเดิม: 0xC0 (SpreadCycle = ON) -> เสียงดัง, สั่น
-	// ของใหม่: 0x40 (SpreadCycle = OFF) -> StealthChop = ON (นิ่ม, เงียบ)
-	TMC_Write(0x00, 0x00000040); // GCONF
+	TMC_Write(0x00, 0x00000040); // GCONF (StealthChop)
 	HAL_Delay(5);
-
-	// 2. Microstepping (1/16) - เหมือนเดิม
 	TMC_Write(0x6C, 0x14000053); // CHOPCONF
 	HAL_Delay(5);
-
-	// 3. 🔥 เพิ่มกระแส (IRUN): แก้ตรงเลขหลักที่ 3 จากท้าย
-	// ของเดิม: 0x00061401 (14 hex = 20 dec) -> ประมาณ 60%
-	// ของใหม่: 0x00061C01 (1C hex = 28 dec) -> ประมาณ 90% (แรงบิดสูงขึ้น)
-	// หมายเหตุ: IHOLD=1 (ตัวท้าย) ยังคงไว้ที่ 1 เพื่อให้ตอนหยุดไม่ร้อน
 	TMC_Write(0x10, 0x00061C01); // IHOLD_IRUN
 	HAL_Delay(5);
 }
 
-// --- 🎮 COMMAND PARSER (New Protocol) ---
-// เปลี่ยนจาก M, T เป็น V (Velocity)
-// V,Linear_Speed,Turn_Speed
+// --- 🎮 COMMAND PARSER ---
 void Parse_Command(char *cmd) {
+	char *asterisk = strchr(cmd, '*');
+	if (asterisk == NULL)
+		return;
+
+	uint8_t calc_cs = 0;
+	for (char *p = cmd; p < asterisk; p++) {
+		calc_cs ^= *p;
+	}
+
+	unsigned int recv_cs;
+	if (sscanf(asterisk + 1, "%x", &recv_cs) != 1)
+		return;
+
+	if (calc_cs != recv_cs) {
+		HAL_UART_Transmit(&huart2, (uint8_t*) "ERR: Noise Detected!\n", 21, 10);
+		return;
+	}
+
+	*asterisk = '\0';
 	char type = cmd[0];
 
-	if (type == 'V') { // Velocity Command
+	if (type == 'V' || type == 'S' || type == 'H') {
+		last_cmd_time = HAL_GetTick();
+		is_timeout = 0;
+	}
+
+	if (type == 'H') {
+		return;
+	}
+	if (type == 'V') {
 		char *p = strtok(cmd + 2, ",");
 		if (p) {
-			target_v = atof(p); // ความเร็วทางตรง
+			target_v = atof(p);
 			p = strtok(NULL, ",");
 			if (p)
-				target_w = atof(p); // ความเร็วเลี้ยว (Diff)
+				target_w = atof(p);
 		}
 
 		char log[64];
 		sprintf(log, "CMD: V=%.0f, W=%.0f\n", target_v, target_w);
 		HAL_UART_Transmit(&huart2, (uint8_t*) log, strlen(log), 10);
 		HAL_UART_Transmit(&huart1, (uint8_t*) "OK\n", 3, 10);
-	} else if (type == 'S') { // Stop Command
+	} else if (type == 'S') {
 		target_v = 0;
 		target_w = 0;
-		// หยุดทันที (Force Stop)
 		current_v_L = 0;
 		current_v_R = 0;
 		HAL_UART_Transmit(&huart1, (uint8_t*) "STOP\n", 5, 10);
@@ -768,7 +755,6 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
  */
 void Error_Handler(void) {
 	/* USER CODE BEGIN Error_Handler_Debug */
-	/* User can add his own implementation to report the HAL error return state */
 	__disable_irq();
 	while (1) {
 	}
@@ -778,7 +764,7 @@ void Error_Handler(void) {
 #ifdef  USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
+  * where the assert_param error has occurred.
   * @param  file: pointer to the source file name
   * @param  line: assert_param error line source number
   * @retval None
@@ -786,8 +772,6 @@ void Error_Handler(void) {
 void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */

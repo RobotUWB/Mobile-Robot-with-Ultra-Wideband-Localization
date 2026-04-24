@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Live PID Tuner</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        background: #1e1e1e;
+        color: white;
+        margin: 0;
+        padding: 20px;
+        text-align: center;
+      }
+      .container {
+        display: flex;
+        justify-content: center;
+        gap: 40px;
+        margin-top: 20px;
+      }
+      .card {
+        background: #2d2d2d;
+        border: 2px solid #555;
+        padding: 20px;
+        border-radius: 8px;
+        width: 300px;
+        text-align: left;
+      }
+      .card h3 {
+        color: #4caf50;
+        margin-top: 0;
+      }
+      .card h3.turn {
+        color: #2196f3;
+      }
+      .input-grp {
+        margin-bottom: 15px;
+      }
+      .input-grp label {
+        display: inline-block;
+        width: 30px;
+        font-weight: bold;
+      }
+      .input-grp input {
+        width: 80px;
+        padding: 5px;
+        font-size: 16px;
+        border-radius: 4px;
+        border: 1px solid #aaa;
+        background: #444;
+        color: white;
+      }
+      button {
+        padding: 15px 30px;
+        font-size: 18px;
+        cursor: pointer;
+        border: none;
+        border-radius: 8px;
+        font-weight: bold;
+        margin-top: 20px;
+      }
+      .btn-auto {
+        background: #ea0b8e;
+        color: white;
+        width: 100%;
+        margin-top: 0;
+      }
+      .btn-connect {
+        background: #4caf50;
+        color: white;
+        margin-bottom: 20px;
+      }
+      #status {
+        font-weight: bold;
+        color: red;
+      }
+      #log {
+        max-width: 600px;
+        height: 100px;
+        overflow-y: scroll;
+        background: #000;
+        color: #0f0;
+        padding: 10px;
+        margin: 20px auto;
+        font-family: monospace;
+        border: 1px solid #555;
+        text-align: left;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>Live PID Tuner (ESP32)</h2>
+    <button class="btn-connect" onclick="connect()">Connect WS</button>
+    <p>Status: <span id="status">Disconnected</span></p>
+
+    <div class="container">
+      <!-- V (Velocity) PID -->
+      <div class="card">
+        <h3>Velocity (V)</h3>
+        <p style="font-size: 12px; color: #aaa; margin-top: -10px">
+          Speed control for driving straight
+        </p>
+
+        <div class="input-grp">
+          <label>P:</label>
+          <input type="number" id="kp_v" value="500.0" step="10" />
+        </div>
+        <div class="input-grp">
+          <label>I:</label>
+          <input type="number" id="ki_v" value="0.2" step="0.1" />
+        </div>
+        <div class="input-grp">
+          <label>D:</label>
+          <input type="number" id="kd_v" value="5.0" step="0.5" />
+        </div>
+      </div>
+
+      <!-- W (Turn) PID -->
+      <div class="card">
+        <h3 class="turn">Turn (W)</h3>
+        <p style="font-size: 12px; color: #aaa; margin-top: -10px">
+          Angular speed for facing target
+        </p>
+
+        <div class="input-grp">
+          <label>P:</label>
+          <input type="number" id="kp_w" value="2.5" step="0.1" />
+        </div>
+        <div class="input-grp">
+          <label>I:</label>
+          <input type="number" id="ki_w" value="0.2" step="0.1" />
+        </div>
+        <div class="input-grp">
+          <label>D:</label>
+          <input type="number" id="kd_w" value="0.5" step="0.1" />
+        </div>
+      </div>
+    </div>
+
+    <button class="btn-auto" onclick="sendPID()">📡 SEND PID TO ESP32</button>
+
+    <div id="log"></div>
+
+    <script>
+      let ws;
+      let pingInterval;
+
+      function connect() {
+        ws = new WebSocket("ws://10.10.10.50:81");
+
+        ws.onopen = function () {
+          document.getElementById("status").innerHTML = "Connected";
+          document.getElementById("status").style.color = "#4CAF50";
+          pingInterval = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) ws.send("PING");
+          }, 100);
+          logMsg("WS Connected!");
+        };
+
+        ws.onmessage = function (evt) {
+          if (evt.data !== "PONG") {
+            logMsg("RX: " + evt.data, "yellow");
+          }
+        };
+
+        ws.onclose = function () {
+          document.getElementById("status").innerHTML = "Disconnected";
+          document.getElementById("status").style.color = "red";
+          clearInterval(pingInterval);
+          logMsg("WS Disconnected. Please reconnect.", "red");
+        };
+      }
+
+      function sendPID() {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          alert("Please connect WebSocket first!");
+          return;
+        }
+
+        // อ่านค่าจาก Input
+        const kp_v = document.getElementById("kp_v").value;
+        const ki_v = document.getElementById("ki_v").value;
+        const kd_v = document.getElementById("kd_v").value;
+
+        const kp_w = document.getElementById("kp_w").value;
+        const ki_w = document.getElementById("ki_w").value;
+        const kd_w = document.getElementById("kd_w").value;
+
+        // สร้างข้อความรูปแบบ PID:kp_v:ki_v:kd_v:kp_w:ki_w:kd_w
+        const cmd = `PID:${kp_v}:${ki_v}:${kd_v}:${kp_w}:${ki_w}:${kd_w}`;
+
+        ws.send(cmd);
+        logMsg("TX: " + cmd, "cyan");
+      }
+
+      function logMsg(msg, color = "#0f0") {
+        const logDiv = document.getElementById("log");
+        const entry = document.createElement("div");
+        entry.style.color = color;
+        entry.textContent = msg;
+        logDiv.appendChild(entry);
+
+        // ลบข้อความเก่าทิ้งถ้าเกิน 50 บรรทัด (กันคอมค้าง)
+        while (logDiv.children.length > 50) {
+          logDiv.removeChild(logDiv.firstChild);
+        }
+
+        logDiv.scrollTop = logDiv.scrollHeight;
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Robot WebSocket Pro Debugger</title>
+    <style>
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background: #121212;
+        color: #e0e0e0;
+        text-align: center;
+        margin: 0;
+        padding: 20px;
+      }
+
+      /* Layout จัดเรียงเป็นกล่องๆ */
+      .dashboard {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 20px;
+        max-width: 900px;
+        margin: 20px auto;
+      }
+      .panel {
+        background: #1e1e1e;
+        padding: 20px;
+        border-radius: 12px;
+        border: 1px solid #333;
+        flex: 1 1 250px;
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+      }
+
+      /* ตัวหนังสือข้อมูล */
+      .data-title {
+        margin-top: 0;
+        color: #b0bec5;
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+      .data-value {
+        font-size: 32px;
+        color: #00e676;
+        font-weight: bold;
+        font-family: "Courier New", Courier, monospace;
+      }
+
+      /* สไตล์ปุ่มกด */
+      .btn {
+        padding: 12px 18px;
+        margin: 4px;
+        font-size: 14px;
+        cursor: pointer;
+        border: none;
+        border-radius: 6px;
+        background: #424242;
+        color: white;
+        transition: 0.1s;
+        font-weight: bold;
+      }
+      .btn:active {
+        transform: scale(0.95);
+      }
+      .btn:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+
+      /* สีปุ่มเฉพาะกิจ */
+      .btn-green {
+        background: #2e7d32;
+      }
+      .btn-green:hover:not(:disabled) {
+        background: #388e3c;
+      }
+      .btn-red {
+        background: #c62828;
+      }
+      .btn-red:hover:not(:disabled) {
+        background: #d32f2f;
+      }
+      .btn-blue {
+        background: #1565c0;
+      }
+      .btn-blue:hover:not(:disabled) {
+        background: #1976d2;
+      }
+      .btn-stop {
+        background: #d84315;
+        width: 100%;
+        grid-column: span 3;
+      }
+
+      /* การจัดวางปุ่มบังคับ WASD */
+      .control-pad {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 6px;
+        max-width: 250px;
+        margin: 0 auto;
+      }
+
+      /* โซนแสดง Log */
+      .log-container {
+        max-width: 900px;
+        margin: 0 auto;
+        background: #000;
+        border-radius: 8px;
+        border: 1px solid #444;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        text-align: left;
+      }
+      .log-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        background: #222;
+        padding: 8px 15px;
+        border-bottom: 1px solid #444;
+      }
+      .log-header h3 {
+        margin: 0;
+        font-size: 14px;
+        color: #aaa;
+      }
+      #log {
+        padding: 10px;
+        height: 300px;
+        overflow-y: auto;
+        font-family: "Courier New", monospace;
+        font-size: 13px;
+        margin: 0;
+      }
+
+      /* สีของข้อความใน Log */
+      .log-msg {
+        padding: 3px 0;
+        border-bottom: 1px dashed #1a1a1a;
+        word-wrap: break-word;
+      }
+      .log-time {
+        color: #666;
+        margin-right: 8px;
+        font-size: 11px;
+      }
+      .txt-send {
+        color: #4fc3f7;
+      } /* สีฟ้าเวลาเราส่ง */
+      .txt-recv {
+        color: #69f0ae;
+      } /* สีเขียวเวลาหุ่นตอบ */
+      .txt-sys {
+        color: #ffd54f;
+      } /* สีเหลืองแจ้งเตือนระบบ */
+
+      .status-dot {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #c62828;
+        margin-right: 8px;
+        box-shadow: 0 0 8px #c62828;
+      }
+      .status-dot.connected {
+        background: #00e676;
+        box-shadow: 0 0 8px #00e676;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      style="
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 20px;
+        flex-wrap: wrap;
+      "
+    >
+      <h2 style="margin: 0; display: flex; align-items: center">
+        <span id="status-dot" class="status-dot"></span>
+        <span id="status-text">DISCONNECTED</span>
+      </h2>
+      <div>
+        <button id="btn-connect" class="btn btn-green" onclick="connectWS()">
+          Connect
+        </button>
+        <button
+          id="btn-disconnect"
+          class="btn btn-red"
+          onclick="disconnectWS()"
+          disabled
+        >
+          Disconnect
+        </button>
+      </div>
+    </div>
+
+    <div class="dashboard">
+      <div class="panel">
+        <h3 class="data-title">UWB Position</h3>
+        <div>
+          <span style="color: #888">X:</span>
+          <span id="uwb-x" class="data-value">0.00</span>
+        </div>
+        <div>
+          <span style="color: #888">Y:</span>
+          <span id="uwb-y" class="data-value">0.00</span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3 class="data-title">STM32 IMU</h3>
+        <div>
+          <span style="color: #888">Angle:</span>
+          <span id="stm-angle" class="data-value">0.00</span>
+        </div>
+      </div>
+
+      <div class="panel" style="flex: 1 1 250px">
+        <div class="control-pad">
+          <button class="btn" onclick="sendCmd('ROTL')">Q</button>
+          <button class="btn btn-blue" onclick="sendCmd('FWD')">W</button>
+          <button class="btn" onclick="sendCmd('ROTR')">E</button>
+          <button class="btn btn-blue" onclick="sendCmd('LEFT')">A</button>
+          <button class="btn btn-blue" onclick="sendCmd('BWD')">S</button>
+          <button class="btn btn-blue" onclick="sendCmd('RIGHT')">D</button>
+          <button class="btn btn-stop" onclick="sendCmd('STOP')">
+            SPACE (STOP)
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="log-container">
+      <div class="log-header">
+        <h3>Terminal Log</h3>
+        <button
+          class="btn"
+          style="padding: 5px 10px; font-size: 12px"
+          onclick="clearLog()"
+        >
+          Clear Log
+        </button>
+      </div>
+      <div id="log"></div>
+    </div>
+
+    <script>
+      const WS_URL = "ws://10.10.10.50:81";
+      let ws = null;
+      let heartbeatTimer = null;
+
+	// กำหนดโควตาบรรทัดสูงสุด ปรับเลขได้ตามต้องการครับ
+      const MAX_LOGS = 200; 
+
+      // ฟังก์ชันจัดการ Log ให้ดูง่าย มี Timestamp และไม่กินสเปคคอม
+      function addLog(msg, type = "sys") {
+        const logDiv = document.getElementById("log");
+        const now = new Date();
+        const timeStr = `${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}:${now.getSeconds().toString().padStart(2, "0")}.${now.getMilliseconds().toString().padStart(3, "0")}`;
+
+        let colorClass = "txt-sys";
+        if (type === "send") colorClass = "txt-send";
+        else if (type === "recv") colorClass = "txt-recv";
+
+        // ใช้ insertAdjacentHTML แทรกเฉพาะบรรทัดใหม่ ไม่กวนบรรทัดเก่า
+        const logEntry = `<div class="log-msg"><span class="log-time">[${timeStr}]</span> <span class="${colorClass}">${msg}</span></div>`;
+        logDiv.insertAdjacentHTML('beforeend', logEntry);
+
+        // เช็คว่าถ้าจำนวนบรรทัดเกิน MAX_LOGS ให้เตะบรรทัดบนสุดทิ้ง
+        while (logDiv.children.length > MAX_LOGS) {
+          logDiv.removeChild(logDiv.firstChild);
+        }
+
+        // Auto-scroll ลงล่างสุด
+        logDiv.scrollTop = logDiv.scrollHeight;
+      }
+
+      function clearLog() {
+        document.getElementById("log").innerHTML = "";
+        addLog("Log cleared.", "sys");
+      }
+
+      // ฟังก์ชันเชื่อมต่อ WebSocket
+      function connectWS() {
+        if (ws && ws.readyState === WebSocket.OPEN) return;
+
+        addLog(`Attempting to connect to ${WS_URL}...`, "sys");
+        ws = new WebSocket(WS_URL);
+
+        ws.onopen = () => {
+          document.getElementById("status-text").innerText = "CONNECTED";
+          document.getElementById("status-dot").classList.add("connected");
+          document.getElementById("btn-connect").disabled = true;
+          document.getElementById("btn-disconnect").disabled = false;
+
+          addLog("WebSocket Connection Established!", "sys");
+
+          // ส่ง PING เลี้ยงสาย (Heartbeat)
+          heartbeatTimer = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send("PING");
+            }
+          }, 150);
+        };
+
+        ws.onclose = () => {
+          document.getElementById("status-text").innerText = "DISCONNECTED";
+          document.getElementById("status-dot").classList.remove("connected");
+          document.getElementById("btn-connect").disabled = false;
+          document.getElementById("btn-disconnect").disabled = true;
+          clearInterval(heartbeatTimer);
+          addLog("Connection Closed.", "sys");
+        };
+
+        ws.onmessage = (event) => {
+          if (event.data === "PONG") return; // ซ่อน PONG ไม่ให้รก
+
+          addLog(`RECV: ${event.data}`, "recv");
+
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === "uwb") {
+              document.getElementById("uwb-x").innerText = parseFloat(
+                data.x,
+              ).toFixed(2);
+              document.getElementById("uwb-y").innerText = parseFloat(
+                data.y,
+              ).toFixed(2);
+            } else if (data.type === "data" && data.angle !== undefined) {
+              document.getElementById("stm-angle").innerText = parseFloat(
+                data.angle,
+              ).toFixed(2);
+            }
+          } catch (e) {}
+        };
+
+        ws.onerror = (error) => {
+          addLog("WebSocket Error Occurred!", "sys");
+        };
+      }
+
+      // ฟังก์ชันตัดการเชื่อมต่อ
+      function disconnectWS() {
+        if (ws) {
+          addLog("Disconnecting manually...", "sys");
+          ws.close();
+        }
+      }
+
+      // ฟังก์ชันส่งคำสั่งควบคุมหุ่น
+      function sendCmd(cmd) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(cmd);
+          addLog(`SEND: ${cmd}`, "send");
+        } else {
+          addLog(`Cannot send ${cmd}. Not connected!`, "sys");
+        }
+      }
+
+      // Keyboard ควบคุม (WASD QE Spacebar)
+      document.addEventListener("keydown", (e) => {
+        if (e.repeat) return;
+        const key = e.key.toLowerCase();
+        if (key === "w") sendCmd("FWD");
+        if (key === "s") sendCmd("BWD");
+        if (key === "a") sendCmd("LEFT");
+        if (key === "d") sendCmd("RIGHT");
+        if (key === "q") sendCmd("ROTL");
+        if (key === "e") sendCmd("ROTR");
+        if (key === " ") sendCmd("STOP");
+      });
+
+      // เปิดเว็บมาปุ๊บ ให้เริ่มเชื่อมต่อเลย
+      window.onload = () => {
+        connectWS();
+      };
+    </script>
+  </body>
+</html>
