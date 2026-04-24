@@ -51,6 +51,7 @@ float nav_prev_error_w = 0.0;
 float user_kp_v = 300.0;
 float user_ki_v = 0.2;
 float user_kd_v = 5.0;
+
 float user_kp_w = 3.0;
 float user_ki_w = 0.3;
 float user_kd_w = 1.0;
@@ -109,7 +110,7 @@ void sendToSTM32(String cmd) {
   else if (cmd == "LEFT")  serialCmd = "V,300,200";  // ล้อซ้าย 100, ล้อขวา 300 
   else if (cmd == "RIGHT") serialCmd = "V,300,-200"; // ล้อซ้าย 300, ล้อขวา 100 
   else if (cmd == "ROTL")  serialCmd = "V,0,300";    // ล้อซ้าย -300, ล้อขวา 300
-  else if (cmd == "ROTR")  serialCmd = "V,0,-300";   // ล้อซ้าย 300, ล้อขวา -300
+  else if (cmd == "ROTR")  serialCmd = "V,0,-300";   // ล้อซ้าย 300, ล้อขวา -300 
   else if (cmd == "STOP")  serialCmd = "S";
   else if (cmd == "H")     serialCmd = "H";
 
@@ -248,6 +249,32 @@ void checkUWB() {
   }
 }
 
+// --- checkEmergency ---
+void checkEmergency() {
+  static bool lastEmerState = false;
+  static unsigned long lastDebounceTime = 0;
+  bool currentReading = digitalRead(EMER_PIN);
+  
+  if (currentReading != lastEmerState) {
+    if (millis() - lastDebounceTime > 50) { // 50ms debounce
+      lastEmerState = currentReading;
+      lastDebounceTime = millis();
+      
+      if (currentReading == HIGH) {
+        Serial.println("EMERGENCY STOP DETECTED! (Motor Power Cut)");
+        sendToSTM32("STOP");
+        isNavigating = false;
+        webSocket.broadcastTXT("{\"type\":\"emer\", \"state\":1}");
+      } else {
+        Serial.println("EMERGENCY STOP RELEASED. (Motor Power Restored)");
+        webSocket.broadcastTXT("{\"type\":\"emer\", \"state\":0}");
+      }
+    }
+  } else {
+    lastDebounceTime = millis();
+  }
+}
+
 // --- WebSocket & Heartbeat ---
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
   switch(type) {
@@ -275,6 +302,11 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
         UWBSerial.println(payloadStr);
       }
       else if (payloadStr.startsWith("GOTO:")) { // Format: GOTO:x1:y1:x2:y2...
+        if (digitalRead(EMER_PIN) == HIGH) {
+           Serial.println("Nav Blocked: Emergency Stop Active");
+           webSocket.broadcastTXT("{\"type\":\"ack\", \"status\":\"error_emer\"}");
+           return;
+        }
         Serial.println("RX GOTO ROUTE: " + payloadStr); 
         
         // Reset Queue
@@ -378,6 +410,11 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
       }
       else { 
         // Manual Drive overrides Auto Nav
+        if (digitalRead(EMER_PIN) == HIGH && payloadStr != "STOP") {
+            Serial.println("Drive Blocked: Emergency Stop Active");
+            webSocket.broadcastTXT("{\"type\":\"ack\", \"status\":\"error_emer\"}");
+            return;
+        }
         isNavigating = false; 
         nav_integral_v = 0.0; nav_prev_error_v = 0.0;
         nav_integral_w = 0.0; nav_prev_error_w = 0.0;
@@ -409,6 +446,7 @@ void handleHeartbeat() {
 void setup() {
   Serial.begin(115200);
   pinMode(WIFI_LED_PIN, OUTPUT);
+  pinMode(EMER_PIN, INPUT_PULLUP);
   digitalWrite(WIFI_LED_PIN, LOW);
   STM32Serial.begin(115200, SERIAL_8N1, RX_Control, TX_Control);
 
@@ -574,6 +612,7 @@ void loop() {
   webSocket.loop();
   checkSTM32();     
   checkUWB();  
+  checkEmergency();
   handleWiFiStateMachine();
   handleHeartbeat(); 
   runNavigation(); // <--- Run Nav Loop

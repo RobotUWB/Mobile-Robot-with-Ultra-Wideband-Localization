@@ -21,6 +21,8 @@ const IPAddress primaryDNS(8, 8, 8, 8);
 #define TX_UWB 27
 #define UWB_BAUDRATE 115200
 
+#define EMER_PIN 25
+
 // --- System Config ---
 #define OTA_HOSTNAME "Sorting"
 #define WEBSOCKET_PORT 81

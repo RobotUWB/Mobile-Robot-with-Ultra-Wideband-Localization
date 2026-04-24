@@ -181,13 +181,16 @@ void Run_Motors_Loop(void) {
 	}
 }
 
-// --- BNO055 I2C Functions ---
 void BNO055_Init(void) {
 	uint8_t mode = BNO055_CONFIG_MODE;
 
-	// 1. เข้า Config Mode
-	HAL_I2C_Mem_Write(&hi2c1, BNO055_I2C_ADDR, BNO055_OPR_MODE_ADDR, 1, &mode,
-			1, 100);
+	// 1. เข้า Config Mode (เปลี่ยนเป็นวนลูปรอจนกว่าจะตื่นและตอบรับ)
+	while(HAL_I2C_Mem_Write(&hi2c1, BNO055_I2C_ADDR, BNO055_OPR_MODE_ADDR, 1, &mode,
+			1, 100) != HAL_OK) {
+		char msg[] = "WAITING FOR BNO055 TO WAKE UP...\n";
+		HAL_UART_Transmit(&huart2, (uint8_t*) msg, strlen(msg), 10);
+		HAL_Delay(100);
+	}
 	HAL_Delay(50);
 
 	// 2. โหลดค่า Calibration Profile
@@ -205,12 +208,65 @@ void BNO055_Init(void) {
 	HAL_UART_Transmit(&huart2, (uint8_t*) msg, strlen(msg), 100);
 }
 
+void I2C_ClearBus(void) {
+	GPIO_InitTypeDef GPIO_InitStruct = { 0 };
+
+	__HAL_RCC_GPIOB_CLK_ENABLE();
+
+	// เซ็ตขา SCL (PB6) และ SDA (PB7) เป็นโหมดส่งออก (Output Open-Drain) ชั่วคราว
+	GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_7;
+	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+	GPIO_InitStruct.Pull = GPIO_NOPULL;
+	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET); // ปล่อย SDA ให้เป็น High
+
+	// กระตุ้น Clock (SCL) 9 ครั้ง ทิ้งบิตค้างในเซ็นเซอร์ให้ชิปคายคลื่นออกมา
+	for (int i = 0; i < 9; i++) {
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
+		for(volatile int j=0; j<1000; j++) __NOP(); // หน่วงเวลาเล็กน้อย
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
+		for(volatile int j=0; j<1000; j++) __NOP();
+	}
+
+	// สร้างฉากจบ (STOP condition: ให้ SDA ขึ้นตอนที่ SCL เป็น High)
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
+	for(volatile int j=0; j<1000; j++) __NOP();
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
+	for(volatile int j=0; j<1000; j++) __NOP();
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
+	for(volatile int j=0; j<1000; j++) __NOP();
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
+	for(volatile int j=0; j<1000; j++) __NOP();
+}
+
 void BNO055_ReadEuler(void) {
 	uint8_t rx_data[2];
+	static uint8_t error_count = 0; // สำหรับนับจำนวนครั้งที่ Error
+
 	if (HAL_I2C_Mem_Read(&hi2c1, BNO055_I2C_ADDR, BNO055_EULER_H_LSB_ADDR,
 			I2C_MEMADD_SIZE_8BIT, rx_data, 2, 10) == HAL_OK) {
 		int16_t raw_heading = (int16_t) ((rx_data[1] << 8) | rx_data[0]);
 		robot_heading = raw_heading / 16.0f;
+		error_count = 0; // ถ้าระบบอ่านสำเร็จให้รีเซ็ตตัวนับ
+	} else {
+		error_count++;
+	}
+
+	// ถ้าระบบ I2C ค้าง อ่านไม่ได้ติดต่อกัน 50 รอบ -> สั่งกู้คืนระบบใหม่ (Recovery)
+	if (error_count > 50) {
+		char msg[] = "I2C ERROR: Hard Resetting I2C Bus...\n";
+		HAL_UART_Transmit(&huart2, (uint8_t*) msg, strlen(msg), 10);
+		
+		HAL_I2C_DeInit(&hi2c1);  // ปิด I2C เพื่อเคลียร์สถานะเออเร่อ
+		HAL_Delay(5);
+		I2C_ClearBus();         // เคลียร์สายให้ Slave ปล่อยขา SDA
+		HAL_Delay(5);
+		MX_I2C1_Init();         // สั่งตั้งค่า I2C ใหม่ (ฟังก์ชันเดิมที่แอตทริคสร้างไว้)
+		HAL_Delay(10);
+		BNO055_Init();          // สั่ง Config ค่าเริ่มต้นของ BNO055 ใหม่อีกครั้ง
+		error_count = 0;
 	}
 }
 /* USER CODE END 0 */
@@ -249,7 +305,7 @@ int main(void) {
 	MX_TIM2_Init();
 	MX_I2C1_Init();
 	/* USER CODE BEGIN 2 */
-	HAL_Delay(100);
+	HAL_Delay(800); // 💥 เพิ่มเวลาหน่วงให้ BNO055 บูตเสร็จชัวร์ๆ ตอนเปิดเครื่อง
 
 	// เรียกใช้ BNO055 แทน ICM
 	BNO055_Init();
