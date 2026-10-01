@@ -210,4 +210,4 @@ The system supports **multi-waypoint routes** drawn directly on the web map. The
 
 This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
 
-**Copyright (c) 2025 Auttaphan Namphai**
+**Copyright (c) 2025 **
